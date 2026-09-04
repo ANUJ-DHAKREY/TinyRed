@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"tinyred/aof"
@@ -74,22 +73,21 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		Logger: logger,
 		Store:  st,
 		RDB:    rdbProc,
-		AOF:    aof,
 	}
 
 	s.CommandHandlers = map[Command]CommandEntry{
-		ECHO:   {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1},
-		SET:    {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1},
-		GET:    {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1},
-		PING:   {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1},
-		CONFIG: {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1},
-		KEYS:   {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1},
-		RPUSH:  {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1},
-		LPUSH:  {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1},
-		LRANGE: {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1},
-		LPOP:   {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2},
-		LLEN:   {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1},
-		BLPOP:  {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1},
+		ECHO:   {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		SET:    {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		GET:    {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		PING:   {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1, IsWrite: false},
+		CONFIG: {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1, IsWrite: false},
+		KEYS:   {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		RPUSH:  {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LPUSH:  {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LRANGE: {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1, IsWrite: false},
+		LPOP:   {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2, IsWrite: true},
+		LLEN:   {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		BLPOP:  {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1, IsWrite: true},
 	}
 
 	if config.Dir != "" && config.Dbfilename != "" {
@@ -102,50 +100,28 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		}
 	}
 
-	//check i manifest exist
-	//if not then create one with content
-	//and create a aof from same content
-	//if Appendonly is enabled
 	if config.Appendonly == TypeAppendOnlyYes {
-		appendOnlyDir := filepath.Join(config.Dir, config.Appenddirname)
-		manifestFilePath := filepath.Join(appendOnlyDir, config.Appendfilename+".manifest")
-		aofPath := filepath.Join(appendOnlyDir, config.Appendfilename+".1.incr.aof")
-
-		if _, err := os.Stat(manifestFilePath); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return s, err
-			}
-			manifestContent := []byte("file " + filepath.Base(aofPath) + " seq 1 type i\n")
-			if err := WriteFile(manifestFilePath, manifestContent, 0644); err != nil {
-				return s, err
-			}
-		}
-		content, err := os.ReadFile(manifestFilePath)
+		aofMgr, err := aof.New(aof.Config{
+			Dir:            config.Dir,
+			Appenddirname:  config.Appenddirname,
+			Appendfilename: config.Appendfilename,
+			Appendfsync:    config.Appendfsync,
+		})
 		if err != nil {
-			return s, err
+			return nil, err
 		}
+		s.AOF = aofMgr
 
-		metadata, err := parseManifestFile(string(content))
-		if err != nil {
-			return s, err
-		}
-		if err := ensureAOFFile(filepath.Join(appendOnlyDir, metadata.AofFilename)); err != nil {
-			return s, err
-		}
-		err = s.AOF.Load(filepath.Join(appendOnlyDir, metadata.AofFilename), func(args []string) error {
+		err = s.AOF.Load(func(args []string) error {
 			req := Request{
 				Command:   strings.ToLower(args[0]),
 				Arguments: args[1:],
 			}
 			_, err := s.Execute(req)
-			if err != nil {
-				return err
-			}
-			return nil
+			return err
 		})
-
 		if err != nil {
-			return s, err
+			return nil, err
 		}
 	}
 
@@ -168,53 +144,6 @@ func (s *Server) Execute(req Request) ([]byte, error) {
 	}
 	return cmd.Handler(req)
 }
-func ensureAOFFile(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("error making directory %s: %w", dir, err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("error creating AOF file: %w", err)
-	}
-	return file.Close()
-}
-
-func parseManifestFile(content string) (aof.ManifestMetaData, error) {
-	// "file appendonly.aof.1.incr.aof seq 1 type i\n
-	metadata := strings.Fields(content)
-	if len(metadata) < 6 {
-		return aof.ManifestMetaData{}, fmt.Errorf("corrupted manifest file")
-	}
-	var data aof.ManifestMetaData
-	data.NodeType = metadata[0]
-	data.AofFilename = metadata[1]
-	seq, err := strconv.Atoi(metadata[3])
-	if err != nil {
-		return aof.ManifestMetaData{}, err
-	}
-	data.Seq = seq
-	data.FileType = metadata[5][0]
-	return data, nil
-}
-
-func WriteFile(path string, content []byte, umask os.FileMode) error {
-	dir := filepath.Dir(path)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			return fmt.Errorf("error making directory %s", err)
-		}
-	}
-
-	writeErr := os.WriteFile(path, content, umask)
-	if writeErr != nil {
-		return fmt.Errorf("error writing pdf: %s", writeErr)
-	}
-
-	return nil
-}
-
 func (s *Server) ListenAndServe() error {
 	port := fmt.Sprintf(":%d", s.Config.Port)
 	listner, err := net.Listen("tcp", port)
@@ -360,10 +289,11 @@ func (s *Server) HandleConection(conn net.Conn) {
 			return
 		}
 
-		if s.Config.Appendonly == TypeAppendOnlyYes {
-			err := s.AOF.Append(data)
+		cmdEntry, ok := s.CommandHandlers[Command(req.Command)]
+		if s.Config.Appendonly == TypeAppendOnlyYes && ok && cmdEntry.IsWrite {
+			err := s.AOF.AppendCmd(strings.ToUpper(req.Command), req.Arguments)
 			if err != nil {
-				s.Logger.Error("internal error occured", "cmd", req.Command)
+				s.Logger.Error("internal error writing to AOF", "cmd", req.Command, "err", err)
 				_, err = conn.Write(resp.ErrGeneric())
 				if err != nil {
 					conn.Close()
@@ -383,11 +313,4 @@ func (s *Server) HandleConection(conn net.Conn) {
 		//if not responde to read command and send error for write commands
 		// err = s.handleResponse(req.Command, conn, data, err)
 	}
-}
-
-func (s *Server) handleResponse(command string, conn net.Conn, data []byte, err error) error {
-	if len(data) == 0 {
-		return fmt.Errorf("Response: no data recieved")
-	}
-	return err
 }

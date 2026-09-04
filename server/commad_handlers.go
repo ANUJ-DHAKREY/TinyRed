@@ -29,6 +29,7 @@ type CommandEntry struct {
 	Handler func(Request) ([]byte, error)
 	MinArgs int
 	MaxArgs int
+	IsWrite bool
 }
 
 func (s *Server) HandleBLPop(req Request) ([]byte, error) {
