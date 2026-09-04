@@ -5,7 +5,6 @@
 > **Redis Protocol Spec:** [RESP2](https://redis.io/docs/latest/develop/reference/protocol-spec/)
 
 ---
-
 ## How To Use This File
 
 Each stage below contains:

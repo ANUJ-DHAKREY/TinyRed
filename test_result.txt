@@ -1,0 +1,88 @@
+go test -v
+=== RUN   TestHelperProcess
+    base_stage_behavior_test.go:51: helper process test
+--- SKIP: TestHelperProcess (0.00s)
+=== RUN   TestAcceptsTCPConnectionOnConfiguredPort_Stage01BindToPort
+--- PASS: TestAcceptsTCPConnectionOnConfiguredPort_Stage01BindToPort (0.05s)
+=== RUN   TestRespondsWithPongWhenPingIsReceived_Stage02RespondToPing
+--- PASS: TestRespondsWithPongWhenPingIsReceived_Stage02RespondToPing (0.20s)
+=== RUN   TestHandlesMultiplePingCommandsOnSameConnection_Stage03MultiplePings
+--- PASS: TestHandlesMultiplePingCommandsOnSameConnection_Stage03MultiplePings (0.05s)
+=== RUN   TestServesConcurrentClientsWithoutDroppingResponses_Stage04ConcurrentClients
+--- PASS: TestServesConcurrentClientsWithoutDroppingResponses_Stage04ConcurrentClients (0.05s)
+=== RUN   TestEchoReturnsArgumentAsBulkString_Stage05Echo
+--- PASS: TestEchoReturnsArgumentAsBulkString_Stage05Echo (0.05s)
+=== RUN   TestSetStoresValueAndGetReturnsStoredOrNull_Stage06SetGet
+--- PASS: TestSetStoresValueAndGetReturnsStoredOrNull_Stage06SetGet (0.05s)
+=== RUN   TestSetWithPxExpiresKeyAfterSpecifiedDuration_Stage07ExpiryPX
+--- PASS: TestSetWithPxExpiresKeyAfterSpecifiedDuration_Stage07ExpiryPX (0.23s)
+=== RUN   TestDoesNotSendDataBeforeAnyCommandIsReceived_Stage02NoUnsolicitedOutput
+--- PASS: TestDoesNotSendDataBeforeAnyCommandIsReceived_Stage02NoUnsolicitedOutput (0.17s)
+=== RUN   TestRPushCreatesNewListWithSingleElement_Stage01
+--- PASS: TestRPushCreatesNewListWithSingleElement_Stage01 (0.05s)
+=== RUN   TestRPushCreatesNewListDifferentKeys_Stage01
+--- PASS: TestRPushCreatesNewListDifferentKeys_Stage01 (0.05s)
+=== RUN   TestRPushAppendsToExistingList_Stage02
+--- PASS: TestRPushAppendsToExistingList_Stage02 (0.05s)
+=== RUN   TestRPushAppendsMultipleCallsSameList_Stage02
+--- PASS: TestRPushAppendsMultipleCallsSameList_Stage02 (0.05s)
+=== RUN   TestRPushMultipleElementsNewList_Stage03
+--- PASS: TestRPushMultipleElementsNewList_Stage03 (0.05s)
+=== RUN   TestRPushMultipleElementsExistingList_Stage03
+--- PASS: TestRPushMultipleElementsExistingList_Stage03 (0.05s)
+=== RUN   TestLRangeBasicSubset_Stage04
+--- PASS: TestLRangeBasicSubset_Stage04 (0.05s)
+=== RUN   TestLRangeMiddleSubset_Stage04
+--- PASS: TestLRangeMiddleSubset_Stage04 (0.05s)
+=== RUN   TestLRangeStopBeyondLength_Stage04
+--- PASS: TestLRangeStopBeyondLength_Stage04 (0.05s)
+=== RUN   TestLRangeStartBeyondLength_Stage04
+    list_stage_behavior_test.go:258: LRANGE start beyond length: expected empty, got [c]
+--- FAIL: TestLRangeStartBeyondLength_Stage04 (0.05s)
+=== RUN   TestLRangeStartGreaterThanStop_Stage04
+--- PASS: TestLRangeStartGreaterThanStop_Stage04 (0.05s)
+=== RUN   TestLRangeNonExistentList_Stage04
+--- PASS: TestLRangeNonExistentList_Stage04 (0.05s)
+=== RUN   TestLRangeNegativeEnd_Stage05
+--- PASS: TestLRangeNegativeEnd_Stage05 (0.05s)
+=== RUN   TestLRangePositiveStartNegativeEnd_Stage05
+--- PASS: TestLRangePositiveStartNegativeEnd_Stage05 (0.05s)
+=== RUN   TestLRangeMixedStartNegativeEnd_Stage05
+--- PASS: TestLRangeMixedStartNegativeEnd_Stage05 (0.05s)
+=== RUN   TestLRangeNegativeOutOfRange_Stage05
+--- PASS: TestLRangeNegativeOutOfRange_Stage05 (0.05s)
+=== RUN   TestLRangeAllElementsWithNegativeIndex_Stage05
+--- PASS: TestLRangeAllElementsWithNegativeIndex_Stage05 (0.05s)
+=== RUN   TestLPushSingleElement_Stage06
+--- PASS: TestLPushSingleElement_Stage06 (0.05s)
+=== RUN   TestLPushMultipleElements_Stage06
+--- PASS: TestLPushMultipleElements_Stage06 (0.05s)
+=== RUN   TestLPushCreatesNewList_Stage06
+--- PASS: TestLPushCreatesNewList_Stage06 (0.05s)
+=== RUN   TestLLenExistingList_Stage07
+--- PASS: TestLLenExistingList_Stage07 (0.05s)
+=== RUN   TestLLenNonExistentList_Stage07
+--- PASS: TestLLenNonExistentList_Stage07 (0.05s)
+=== RUN   TestLLenAfterMultiplePushes_Stage07
+--- PASS: TestLLenAfterMultiplePushes_Stage07 (0.05s)
+=== RUN   TestLPopSingleElement_Stage08
+--- PASS: TestLPopSingleElement_Stage08 (0.05s)
+=== RUN   TestLPopVerifiesRemainingElements_Stage08
+--- PASS: TestLPopVerifiesRemainingElements_Stage08 (0.05s)
+=== RUN   TestLPopEmptyList_Stage08
+--- PASS: TestLPopEmptyList_Stage08 (0.05s)
+=== RUN   TestLPopMultipleCallsDrainsList_Stage08
+--- PASS: TestLPopMultipleCallsDrainsList_Stage08 (0.05s)
+=== RUN   TestLPopWithCount_Stage09
+--- PASS: TestLPopWithCount_Stage09 (0.05s)
+=== RUN   TestLPopWithCountVerifiesRemaining_Stage09
+--- PASS: TestLPopWithCountVerifiesRemaining_Stage09 (0.05s)
+=== RUN   TestLPopCountExceedsLength_Stage09
+--- PASS: TestLPopCountExceedsLength_Stage09 (0.05s)
+=== RUN   TestLPopCountAll_Stage09
+--- PASS: TestLPopCountAll_Stage09 (0.05s)
+=== RUN   TestBLPopBlocksAndReceivesElement_Stage10
+--- PASS: TestBLPopBlocksAndReceivesElement_Stage10 (0.15s)
+=== RUN   TestBLPopServesLongestWaitingClient_Stage10
+signal: interrupt
+FAIL	tinyred	128.772s

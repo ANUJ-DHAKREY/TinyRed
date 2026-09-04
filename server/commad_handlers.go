@@ -2,11 +2,12 @@ package server
 
 import (
 	"fmt"
-	"slices"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 	"tinyred/resp"
+	"tinyred/store"
 )
 
 const (
@@ -19,7 +20,7 @@ const (
 	RPUSH  Command = "rpush"
 	LPUSH  Command = "lpush"
 	LPOP   Command = "lpop"
-	LLEN   Command = "llen "
+	LLEN   Command = "llen"
 	BLPOP  Command = "blpop"
 	LRANGE Command = "lrange"
 )
@@ -31,53 +32,138 @@ type CommandEntry struct {
 }
 
 func (s *Server) HandleBLPop(req Request) ([]byte, error) {
-	ss := &resp.SimpleString{
-		Value: "PONG",
-	}
+	key := req.Arguments[0]
+	timeoutArg := req.Arguments[1]
 
-	return ss.Marshal(), nil
-}
-func (s *Server) HandleLLen(req Request) ([]byte, error) {
-	ss := &resp.SimpleString{
-		Value: "PONG",
-	}
-
-	return ss.Marshal(), nil
-}
-func (s *Server) HandleLPop(req Request) ([]byte, error) {
-	ss := &resp.SimpleString{
-		Value: "PONG",
-	}
-
-	return ss.Marshal(), nil
-}
-func (s *Server) HandleLPush(req Request) ([]byte, error) {
-	listKey := req.Arguments[0]
-	values := make([]string, len(req.Arguments[1:]))
-	copy(values, req.Arguments[1:])
-	slices.Reverse(values)
-	list, ok := s.Store.Get(listKey)
-	if !ok {
-		entry := &resp.Entry{
-			Type:  resp.EntryTypeList,
-			Value: values,
+	timeoutInSec, err := strconv.ParseFloat(timeoutArg, 32)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.WRONGTYPE,
+			Message: resp.ErrorMessageNotNumber,
 		}
-		s.Store.Set(listKey, entry)
-		result := resp.Integer{Value: int64(len(values))}
+	}
+	poppedElement, err := s.Store.BLPOP(key, timeoutInSec)
+	if err != nil {
+		return nil, err
+	}
+	if poppedElement == (store.BLPopdata{}) {
+		na := resp.NullArray{}
+		return na.Marshal(), nil
+	}
+	res := resp.Array{}
+	keyBs := resp.BulkString{
+		Value: poppedElement.Key,
+	}
+	valueBs := resp.BulkString{
+		Value: poppedElement.Value,
+	}
+
+	res.Value = append(res.Value, string(keyBs.Marshal()))
+	res.Value = append(res.Value, string(valueBs.Marshal()))
+	return res.Marshal(), nil
+}
+
+func (s *Server) HandleLLen(req Request) ([]byte, error) {
+	//find a list by its key
+	//if not exist return 0 length list
+	//check if its list
+	//if its a list return its length
+	key := req.Arguments[0]
+	list, ok := s.Store.Get(key)
+	if !ok {
+		result := &resp.Integer{Value: 0}
 		return result.Marshal(), nil
 	}
 
 	if list.Type != resp.EntryTypeList {
-		return resp.ErrWrongType(), nil
+		return nil, &resp.SimpleError{
+			Type:    resp.WRONGTYPE,
+			Message: resp.ErrorMessageWrongType,
+		}
 	}
-	existing, ok := list.Value.([]string)
+	values, ok := list.Value.([]string)
 	if !ok {
-		return nil, fmt.Errorf("internal error: list value is not []string")
+		return nil, fmt.Errorf(ErrorMessageStringTypeCaste)
+	}
+	result := &resp.Integer{
+		Value: int64(len(values)),
+	}
+	return result.Marshal(), nil
+}
+
+func (s *Server) HandleLPop(req Request) ([]byte, error) {
+	//check if length is given
+	//if not length is 1
+	//check if list exist or list have atleast 1 element
+	//if not then return null bulk string
+	//if length is greater then list length
+	//then normalise the parameter length to list length
+	//then pop the elments from the front
+	//set the remaining list as new list
+	//return the popped list
+
+	key := req.Arguments[0]
+	elementToPopCount := 1
+	if len(req.Arguments) > 1 {
+		parsedCount, err := strconv.Atoi(req.Arguments[1])
+		if err != nil {
+			return nil, &resp.SimpleError{}
+		}
+		elementToPopCount = parsedCount
+	}
+	result := make([]string, 0)
+	_, err := s.Store.Update(key, func(e *resp.Entry) (*resp.Entry, error) {
+		if e == nil {
+			return nil, nil
+		}
+		values, ok := e.Value.([]string)
+		if !ok {
+			return nil, fmt.Errorf(ErrorMessageStringTypeCaste)
+		}
+		size := len(values)
+		if size == 0 {
+			return e, nil
+		}
+		if elementToPopCount > size {
+			elementToPopCount = size
+		}
+		result = values[:elementToPopCount]
+		values = values[elementToPopCount:]
+		e.Value = values
+		return e, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	existing = append(values, existing...)
-	list.Value = existing
-	s.Store.Set(listKey, list)
+	if len(result) == 0 {
+		return (&resp.NullBulkString{}).Marshal(), nil
+	}
+	if len(req.Arguments) == 1 {
+		bs := &resp.BulkString{
+			Value: result[0],
+		}
+		return bs.Marshal(), nil
+	}
+	arr := &resp.Array{}
+	for _, val := range result {
+		bs := &resp.BulkString{
+			Value: val,
+		}
+		arr.Value = append(arr.Value, string(bs.Marshal()))
+	}
+	return arr.Marshal(), nil
+}
+
+func (s *Server) HandleLPush(req Request) ([]byte, error) {
+	listKey := req.Arguments[0]
+	values := make([]string, len(req.Arguments[1:]))
+	copy(values, req.Arguments[1:])
+	list, err := s.Store.ListPush(listKey, values, store.Left)
+	if err != nil {
+		return nil, err
+	}
+	existing := list.Value.([]string)
 	result := resp.Integer{Value: int64(len(existing))}
 	return result.Marshal(), nil
 }
@@ -106,8 +192,8 @@ func (s *Server) HandleLRange(req Request) ([]byte, error) {
 	}
 
 	list, ok := s.Store.Get(listKey)
+	arr := resp.Array{}
 	if !ok {
-		arr := resp.Array{}
 		return arr.Marshal(), nil
 	}
 
@@ -117,14 +203,19 @@ func (s *Server) HandleLRange(req Request) ([]byte, error) {
 
 	existing, ok := list.Value.([]string)
 	if !ok {
-		return nil, fmt.Errorf("internal error: list value is not []string")
+		return nil, fmt.Errorf(ErrorMessageStringTypeCaste)
 	}
 
 	listLen := len(existing)
+	if startIdx >= listLen {
+		return arr.Marshal(), nil
+	}
+
 	startIdx = normalizeIndex(startIdx, listLen)
 	endIdx = normalizeIndex(endIdx, listLen)
-
-	arr := resp.Array{}
+	if startIdx > endIdx {
+		return arr.Marshal(), nil
+	}
 	for i := startIdx; i <= endIdx; i++ {
 		bs := resp.BulkString{Value: existing[i]}
 		arr.Value = append(arr.Value, string(bs.Marshal()))
@@ -134,29 +225,13 @@ func (s *Server) HandleLRange(req Request) ([]byte, error) {
 func (s *Server) HandleRPush(req Request) ([]byte, error) {
 	listKey := req.Arguments[0]
 	values := req.Arguments[1:]
-
-	list, ok := s.Store.Get(listKey)
-	if !ok {
-		entry := &resp.Entry{
-			Type:  resp.EntryTypeList,
-			Value: values,
-		}
-		s.Store.Set(listKey, entry)
-		result := resp.Integer{Value: int64(len(values))}
-		return result.Marshal(), nil
+	list, err := s.Store.ListPush(listKey, values, store.Right)
+	if err != nil {
+		return nil, err
 	}
 
-	if list.Type != resp.EntryTypeList {
-		return resp.ErrWrongType(), nil
-	}
-	existing, ok := list.Value.([]string)
-	if !ok {
-		return nil, fmt.Errorf("internal error: list value is not []string")
-	}
-	existing = append(existing, values...)
-	list.Value = existing
-	s.Store.Set(listKey, list)
-	result := resp.Integer{Value: int64(len(existing))}
+	newValues := list.Value.([]string)
+	result := resp.Integer{Value: int64(len(newValues))}
 	return result.Marshal(), nil
 }
 
@@ -174,47 +249,35 @@ func (s *Server) HandleKeys(req Request) ([]byte, error) {
 	return arr.Marshal(), nil
 }
 
+func (s *Server) getConfig(key string) (string, bool) {
+	key = strings.ToLower(key)
+	configValue := reflect.ValueOf(s.Config).Elem()
+	configType := configValue.Type()
+	for i := 0; i < configType.NumField(); i++ {
+		field := configType.Field(i)
+		if field.Tag.Get("config") != key {
+			continue
+		}
+		return fmt.Sprint(configValue.Field(i).Interface()), true
+	}
+	return "", false
+}
 func (s *Server) HandleConfig(req Request) ([]byte, error) {
 
 	if strings.ToLower(req.Arguments[0]) != "get" {
 		return nil, fmt.Errorf("invalid parameter for command config")
 	}
 
-	if strings.ToLower(req.Arguments[1]) != ConfigDir && strings.ToLower(req.Arguments[1]) != ConfigDbfilename {
-		return nil, fmt.Errorf("invalid value parameter for config get")
-	}
-
 	arr := resp.Array{}
-	switch strings.ToLower(req.Arguments[1]) {
-	case ConfigDir:
-		bs := resp.BulkString{
-			Value: ConfigDir,
-		}
-		arr.Value = append(arr.Value, string(bs.Marshal()))
-		if s.Config.Dir == "" {
-			nullStr := resp.NullBulkString{}
-			arr.Value = append(arr.Value, string(nullStr.Marshal()))
-		} else {
-			bs2 := resp.BulkString{
-				Value: s.Config.Dir,
-			}
-			arr.Value = append(arr.Value, string(bs2.Marshal()))
-		}
-	case ConfigDbfilename:
-		bs := resp.BulkString{
-			Value: ConfigDbfilename,
-		}
-		arr.Value = append(arr.Value, string(bs.Marshal()))
-		if s.Config.Dbfilename == "" {
-			nullStr := resp.NullBulkString{}
-			arr.Value = append(arr.Value, string(nullStr.Marshal()))
-		} else {
-			bs2 := resp.BulkString{
-				Value: s.Config.Dbfilename,
-			}
-			arr.Value = append(arr.Value, string(bs2.Marshal()))
-		}
+	configKey := strings.ToLower(req.Arguments[1])
+	configValue, ok := s.getConfig(configKey)
+	if !ok {
+		return arr.Marshal(), nil
 	}
+	keyResponse := resp.BulkString{Value: configKey}
+	arr.Value = append(arr.Value, string(keyResponse.Marshal()))
+	valueResponse := resp.BulkString{Value: configValue}
+	arr.Value = append(arr.Value, string(valueResponse.Marshal()))
 	data := arr.Marshal()
 	return data, nil
 }

@@ -5,22 +5,29 @@ import (
 	"log/slog"
 	"os"
 	"tinyred/rdb"
-	"tinyred/resp"
 	"tinyred/server"
 	"tinyred/store"
 )
 
 func main() {
-	defaultConfig := server.GetDefaultConfig()
+	defaultConfig, err := server.GetDefaultConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 	config := server.GetConfig(defaultConfig)
 	s, err := server.NewServer(
 		config,
 		slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		&store.Store{Data: make(map[string]*resp.Entry)},
+		store.New(),
 		rdb.Init(),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
-	s.ListenAndServe()
+	//base, RDB, list, AOF, transaction, optimistic locking
+	//pub-sub, stream, sorted sets, geospatial commands,
+	//replication , authentication
+	if err := s.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }

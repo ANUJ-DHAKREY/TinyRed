@@ -10,7 +10,7 @@ import (
 
 const (
 	TypeSimpleString string = "simple_string"
-	TypeArray        string = "Array"
+	TypeArray        string = "array"
 	TypeSimpleError  string = "simple_error"
 	TypeInteger      string = "integer"
 	TypeBulkString   string = "bulk_string"
@@ -52,6 +52,12 @@ const (
 	NOREPLICAS ErrorType = "NOREPLICAS"
 )
 
+const (
+	ErrorMessageWrongType  string = "Operation against a key holding the wrong kind of value"
+	ErrorMessageNotInteger string = "value is not an integer or out of range"
+	ErrorMessageNotNumber  string = "value is not an number"
+)
+
 type RespType interface {
 	//will need to check the return type of this
 	//cause we need to handle diffrent return types for this
@@ -83,6 +89,8 @@ type BulkString struct {
 type NullBulkString struct {
 }
 
+type NullArray struct {
+}
 type BulkError struct {
 	Value string
 }
@@ -90,6 +98,9 @@ type BulkError struct {
 func readHeader(reader *bufio.Reader) ([]byte, error) {
 	data, err := reader.ReadBytes('\n')
 	if err != nil {
+		if err == io.EOF && len(data) > 0 {
+			return nil, fmt.Errorf("reading from connection: %w", io.ErrUnexpectedEOF)
+		}
 		return nil, fmt.Errorf("reading from connection: %w", err)
 	}
 
@@ -108,7 +119,7 @@ func size(data []byte) (int, error) {
 	sizeArr := data[1 : len(data)-2]
 	count, err := strconv.Atoi(string(sizeArr))
 	if err != nil {
-		return 0, fmt.Errorf("invalid array RESP header: expecting size of Array got %v", size)
+		return 0, fmt.Errorf("invalid array RESP header: expecting size of Array got %s", string(sizeArr))
 	}
 	return count, nil
 }
@@ -120,6 +131,9 @@ func (a *Array) Unmarshal(reader *bufio.Reader) error {
 	//and then return it
 
 	data, err := readHeader(reader)
+	if err != nil {
+		return err
+	}
 	symbol := data[0]
 	if symbol != TypeSymbols[TypeArray] {
 		return fmt.Errorf("unexpected RESP type expected %q, got %q", TypeSymbols[TypeArray], symbol)
@@ -175,7 +189,10 @@ func (a *Array) Marshal() []byte {
 	return data
 }
 
-// +OK\r\n
+func (a *NullArray) Marshal() []byte {
+	return []byte("*-1\r\n")
+}
+
 func (ss *SimpleString) Unmarshal(reader *bufio.Reader) error {
 	data, err := reader.ReadBytes('\n')
 	if err != nil {
@@ -227,6 +244,9 @@ func (ss *BulkString) Unmarshal(reader *bufio.Reader) error {
 	_, err = io.ReadFull(reader, buffer)
 
 	if err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return fmt.Errorf("reading from connection: %w", io.ErrUnexpectedEOF)
+		}
 		return fmt.Errorf("reading from connection %w", err)
 	}
 	CRLF := string(buffer[len(buffer)-2:])
@@ -304,7 +324,7 @@ func ErrGeneric() []byte {
 func ErrWrongType() []byte {
 	e := &SimpleError{
 		Type:    WRONGTYPE,
-		Message: "Operation against a key holding the wrong kind of value",
+		Message: ErrorMessageWrongType,
 	}
 	data := e.Marshal()
 	return data
@@ -324,7 +344,7 @@ func ErrSyntax() []byte {
 func ErrNotInteger() []byte {
 	e := &SimpleError{
 		Type:    ERR,
-		Message: "value is not an integer or out of range",
+		Message: ErrorMessageNotInteger,
 	}
 	data := e.Marshal()
 	return data
