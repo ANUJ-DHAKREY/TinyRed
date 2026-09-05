@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"tinyred/aof"
 	"tinyred/rdb"
@@ -39,6 +40,22 @@ const (
 	ErrorMessageStringTypeCaste string = "internal error: list value is not []string"
 )
 
+const (
+	TypeClientExternal string = "external"
+	TypeClientInternal string = "internal"
+)
+
+const (
+	ClientModeNormal      string = "normal"
+	ClientModeTransaction string = "transaction"
+)
+
+var TransactionalCommands map[string]bool = map[string]bool{
+	MULTI:   true,
+	DISCARD: true,
+	EXEC:    true,
+}
+
 type Request struct {
 	Command   string
 	Arguments []string
@@ -58,36 +75,51 @@ type Config struct {
 	Appendfsync      string `config:"appendfsync"`
 }
 
+type Client struct {
+	ClientType   string
+	Id           int64
+	Mode         string
+	Conn         net.Conn
+	CommandQueue []Request
+}
 type Server struct {
 	Logger          *slog.Logger
 	Config          *Config
 	Store           *store.Store
-	CommandHandlers map[Command]CommandEntry
+	CommandHandlers map[string]CommandEntry
 	RDB             rdb.RDBProcessor
 	AOF             aof.AOF
+	Clients         map[int64]*Client
+	ExecutionMutex  sync.RWMutex
 }
 
 func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb.RDBProcessor) (*Server, error) {
 	s := &Server{
-		Config: config,
-		Logger: logger,
-		Store:  st,
-		RDB:    rdbProc,
+		Config:         config,
+		Logger:         logger,
+		Store:          st,
+		RDB:            rdbProc,
+		Clients:        make(map[int64]*Client),
+		ExecutionMutex: sync.RWMutex{},
 	}
 
-	s.CommandHandlers = map[Command]CommandEntry{
-		ECHO:   {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1, IsWrite: false},
-		SET:    {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		GET:    {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		PING:   {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1, IsWrite: false},
-		CONFIG: {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1, IsWrite: false},
-		KEYS:   {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		RPUSH:  {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		LPUSH:  {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		LRANGE: {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1, IsWrite: false},
-		LPOP:   {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2, IsWrite: true},
-		LLEN:   {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		BLPOP:  {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+	s.CommandHandlers = map[string]CommandEntry{
+		ECHO:    {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		SET:     {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		GET:     {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		PING:    {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1, IsWrite: false},
+		CONFIG:  {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1, IsWrite: false},
+		KEYS:    {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		RPUSH:   {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LPUSH:   {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LRANGE:  {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1, IsWrite: false},
+		LPOP:    {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2, IsWrite: true},
+		LLEN:    {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		BLPOP:   {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		INCR:    {Handler: s.HandleINCR, MinArgs: 1, MaxArgs: 1, IsWrite: true},
+		MULTI:   {Handler: s.HandleMULTI, MinArgs: 0, MaxArgs: 0, IsWrite: false},
+		DISCARD: {Handler: s.HandleDiscard, MinArgs: 0, MaxArgs: 0, IsWrite: false},
+		// EXEC:    {Handler: s.HandleExec, MinArgs: 0, MaxArgs: 0, IsWrite: true},
 	}
 
 	if config.Dir != "" && config.Dbfilename != "" {
@@ -117,7 +149,13 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 				Command:   strings.ToLower(args[0]),
 				Arguments: args[1:],
 			}
-			_, err := s.Execute(req)
+			client := Client{
+				ClientType: TypeClientInternal,
+				Id:         getNewClientId(),
+				Mode:       ClientModeNormal,
+				Conn:       &net.TCPConn{},
+			}
+			_, err := s.Execute(req, &client)
 			return err
 		})
 		if err != nil {
@@ -128,8 +166,8 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 	return s, nil
 }
 
-func (s *Server) Execute(req Request) ([]byte, error) {
-	cmd, ok := s.CommandHandlers[Command(req.Command)]
+func (s *Server) Execute(req Request, c *Client) ([]byte, error) {
+	cmd, ok := s.CommandHandlers[req.Command]
 	if !ok {
 		return nil, &resp.SimpleError{
 			Type:    resp.ERR,
@@ -142,7 +180,18 @@ func (s *Server) Execute(req Request) ([]byte, error) {
 			Message: fmt.Sprintf("wrong number of arguments for '%s' command", req.Command),
 		}
 	}
-	return cmd.Handler(req)
+
+	transactionalCommand, ok := TransactionalCommands[req.Command]
+	if !ok || !transactionalCommand {
+		if c.Mode == ClientModeTransaction {
+			c.CommandQueue = append(c.CommandQueue, req)
+			return (&resp.SimpleString{
+				Value: "QUEUED",
+			}).Marshal(), nil
+		}
+	}
+
+	return cmd.Handler(req, c)
 }
 func (s *Server) ListenAndServe() error {
 	port := fmt.Sprintf(":%d", s.Config.Port)
@@ -154,6 +203,30 @@ func (s *Server) ListenAndServe() error {
 	fmt.Printf("Server started on port: %d", s.Config.Port)
 	return s.Serve(listner)
 }
+
+var ClientOffset int64
+var ClientIDMutex sync.Mutex
+
+func getNewClientId() int64 {
+	ClientIDMutex.Lock()
+	defer ClientIDMutex.Unlock()
+	ClientOffset += 1
+	return ClientOffset
+}
+
+func (s *Server) AddClient(conn net.Conn) *Client {
+	clientId := getNewClientId()
+	client := &Client{
+		Id:           clientId,
+		ClientType:   TypeClientExternal,
+		Mode:         ClientModeNormal,
+		Conn:         conn,
+		CommandQueue: make([]Request, 0),
+	}
+
+	s.Clients[clientId] = client
+	return client
+}
 func (s *Server) Serve(listener net.Listener) error {
 	//will add gracefull shutDown in future
 	for {
@@ -162,7 +235,8 @@ func (s *Server) Serve(listener net.Listener) error {
 			s.Logger.Error("error accepting connection", "error", err)
 			continue
 		}
-		go s.HandleConection(conn)
+		client := s.AddClient(conn)
+		go s.HandleConnection(client)
 	}
 }
 
@@ -252,11 +326,33 @@ func (s *Server) ParseRequest(reader *bufio.Reader) (Request, error) {
 	return req, nil
 }
 
-func (s *Server) HandleConection(conn net.Conn) {
-	reader := bufio.NewReader(conn)
-	defer conn.Close()
+func (s *Server) CloseConnection(c *Client) {
+	err := c.Conn.Close()
+	if err != nil {
+		s.Logger.Error("error closing Connection", "err", err)
+	}
+	delete(s.Clients, c.Id)
+}
+
+func (s *Server) ExecuteInTransaction(req Request, c *Client) []byte {
+	data, err := s.Execute(req, c)
+	if err != nil {
+		var clientErr *resp.SimpleError
+		if errors.As(err, &clientErr) {
+			return clientErr.Marshal()
+		} else {
+			s.Logger.Error("internal error occured", "cmd", req.Command)
+			return resp.ErrGeneric()
+		}
+	}
+	return data
+}
+
+func (s *Server) HandleConnection(c *Client) {
+	reader := bufio.NewReader(c.Conn)
+	defer s.CloseConnection(c)
 	for {
-		conn.SetReadDeadline(time.Now().Add(time.Duration(s.Config.Timeout) * time.Second))
+		c.Conn.SetReadDeadline(time.Now().Add(time.Duration(s.Config.Timeout) * time.Second))
 		req, err := s.ParseRequest(reader)
 		if err != nil {
 			var protocolErr *ProtocolError
@@ -265,52 +361,108 @@ func (s *Server) HandleConection(conn net.Conn) {
 					Type:    resp.ERR,
 					Message: protocolErr.Error(),
 				}
-				_, _ = conn.Write(clientErr.Marshal())
-				return
+				_, err := c.Conn.Write(clientErr.Marshal())
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+				}
+				break
 			}
 			var clientErr *resp.SimpleError
 			if errors.As(err, &clientErr) {
-				_, _ = conn.Write(clientErr.Marshal())
-				return
+				_, err := c.Conn.Write(clientErr.Marshal())
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
+				}
+				continue
 			}
 			// EOF, timeout, or other I/O error — close connection
-			return
+			break
 		}
-		data, err := s.Execute(req)
+
+		if req.Command == EXEC {
+			if c.Mode != ClientModeTransaction {
+				se := resp.SimpleError{
+					Type:    resp.ERR,
+					Message: "EXEC without MULTI",
+				}
+
+				_, err := c.Conn.Write(se.Marshal())
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
+				}
+				continue
+			}
+			s.ExecutionMutex.Lock()
+			AOFData := make([]byte, 0)
+			response := resp.Array{}
+			queue := s.Clients[c.Id].CommandQueue
+			c.CommandQueue = []Request{}
+			c.Mode = ClientModeNormal
+			for _, req := range queue {
+				data := s.ExecuteInTransaction(req, c)
+				response.Value = append(response.Value, string(data))
+				if s.Config.Appendonly == TypeAppendOnlyYes {
+					a := resp.Array{}
+					a.Value = append(a.Value, string((&resp.BulkString{Value: req.Command}).Marshal()))
+					for i := range req.Arguments {
+						a.Value = append(a.Value, string((&resp.BulkString{Value: req.Arguments[i]}).Marshal()))
+					}
+					AOFData = append(AOFData, a.Marshal()...)
+				}
+			}
+
+			if s.Config.Appendonly == TypeAppendOnlyYes {
+				err := s.AOF.Append(AOFData)
+				_ = err
+			}
+
+			//handle AOF error
+			//for now ignore the error in future we need to
+			//stop servng write commands in case of error while writing
+			s.ExecutionMutex.Unlock()
+			c.Conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
+			_, err := c.Conn.Write(response.Marshal())
+			if err != nil {
+				s.Logger.Error("error writing response", "err", err.Error())
+				break
+			}
+			continue
+		}
+
+		s.ExecutionMutex.RLock()
+		data, err := s.Execute(req, c)
 		if err != nil {
 			var clientErr *resp.SimpleError
 			if errors.As(err, &clientErr) {
-				conn.Write(clientErr.Marshal())
+				_, err = c.Conn.Write(clientErr.Marshal())
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
+				}
 			} else {
 				s.Logger.Error("internal error occured", "cmd", req.Command)
-				conn.Write(resp.ErrGeneric())
-			}
-			conn.Close()
-			return
-		}
-
-		cmdEntry, ok := s.CommandHandlers[Command(req.Command)]
-		if s.Config.Appendonly == TypeAppendOnlyYes && ok && cmdEntry.IsWrite {
-			err := s.AOF.AppendCmd(strings.ToUpper(req.Command), req.Arguments)
-			if err != nil {
-				s.Logger.Error("internal error writing to AOF", "cmd", req.Command, "err", err)
-				_, err = conn.Write(resp.ErrGeneric())
+				_, err = c.Conn.Write(resp.ErrGeneric())
 				if err != nil {
-					conn.Close()
-					return
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
 				}
 			}
 		}
-		conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
-		_, err = conn.Write(data)
-		if err != nil {
-			conn.Close()
-			return
+
+		cmdEntry, ok := s.CommandHandlers[req.Command]
+		if s.Config.Appendonly == TypeAppendOnlyYes && ok && cmdEntry.IsWrite {
+			err := s.AOF.AppendCmd(strings.ToUpper(req.Command), req.Arguments)
+			// for now ignore the error handle AOF write failures in future
+			_ = err
 		}
-		//write to AOF
-		//write to replication connection for master
-		//for replica check if  it replication connection if yes do not reply
-		//if not responde to read command and send error for write commands
-		// err = s.handleResponse(req.Command, conn, data, err)
+		s.ExecutionMutex.RUnlock()
+		c.Conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
+		_, err = c.Conn.Write(data)
+		if err != nil {
+			s.Logger.Error("error writing response", "err", err.Error())
+			break
+		}
 	}
 }

@@ -1,0 +1,13 @@
+# Build artifacts
+tinyred
+__debug_bin*
+bin/
+
+# Runtime/data files
+dump.rdb
+dump.hcd
+appendonlydir/
+test_result.txt
+
+# Docs (kept locally, not version controlled)
+*.md

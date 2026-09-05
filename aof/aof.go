@@ -23,6 +23,7 @@ type ReplayFunc func(args []string) error
 type AOF interface {
 	Load(replay ReplayFunc) error
 	AppendCmd(cmd string, args []string) error
+	Append(data []byte) error
 	Close() error
 }
 
@@ -120,7 +121,8 @@ func (a *AOFLocal) Append(data []byte) error {
 	if _, err := a.file.Write(data); err != nil {
 		return fmt.Errorf("failed to write to AOF file: %w", err)
 	}
-
+	//for now we are only supporting the always policy for AOF logs in future
+	//we will need to support flag such as eversec etc
 	if a.fsyncPolicy == "always" {
 		if err := a.file.Sync(); err != nil {
 			return fmt.Errorf("failed to sync AOF file: %w", err)

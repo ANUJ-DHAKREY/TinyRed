@@ -11,28 +11,110 @@ import (
 )
 
 const (
-	ECHO   Command = "echo"
-	SET    Command = "set"
-	GET    Command = "get"
-	PING   Command = "ping"
-	CONFIG Command = "config"
-	KEYS   Command = "keys"
-	RPUSH  Command = "rpush"
-	LPUSH  Command = "lpush"
-	LPOP   Command = "lpop"
-	LLEN   Command = "llen"
-	BLPOP  Command = "blpop"
-	LRANGE Command = "lrange"
+	ECHO    string = "echo"
+	SET     string = "set"
+	GET     string = "get"
+	PING    string = "ping"
+	CONFIG  string = "config"
+	KEYS    string = "keys"
+	RPUSH   string = "rpush"
+	LPUSH   string = "lpush"
+	LPOP    string = "lpop"
+	LLEN    string = "llen"
+	BLPOP   string = "blpop"
+	LRANGE  string = "lrange"
+	INCR    string = "incr"
+	MULTI   string = "multi"
+	DISCARD string = "discard"
+	EXEC    string = "exec"
 )
 
 type CommandEntry struct {
-	Handler func(Request) ([]byte, error)
+	Handler func(Request, *Client) ([]byte, error)
 	MinArgs int
 	MaxArgs int
 	IsWrite bool
 }
 
-func (s *Server) HandleBLPop(req Request) ([]byte, error) {
+func (s *Server) HandleDiscard(req Request, c *Client) ([]byte, error) {
+	if c.Mode != ClientModeTransaction {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: "DISCARD without MULTI",
+		}
+	}
+	c.Mode = ClientModeNormal
+	c.CommandQueue = []Request{}
+	return (&resp.SimpleString{
+		Value: "OK",
+	}).Marshal(), nil
+}
+
+func (s *Server) HandleMULTI(req Request, c *Client) ([]byte, error) {
+	//check if Mode of the client of transaction return err
+	if c.Mode == ClientModeTransaction {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: "MULTI calls can not be nested",
+		}
+	}
+
+	//if normal change mode to transaction and return ok response
+	c.Mode = ClientModeTransaction
+	return (&resp.SimpleString{
+		Value: "OK",
+	}).Marshal(), nil
+}
+func (s *Server) HandleINCR(req Request, c *Client) ([]byte, error) {
+	// Key exists and has a numerical value (This stage)
+	// Key doesn't exist (later stages)
+	// Key exists but doesn't have a numerical value (later stages)
+	key := req.Arguments[0]
+
+	e, err := s.Store.Update(key, func(e *resp.Entry) (*resp.Entry, error) {
+		if e == nil {
+			entry := resp.Entry{
+				Type:  resp.EntryTypeString,
+				Value: "1",
+			}
+			return &entry, nil
+		}
+		if e.Type != resp.EntryTypeString {
+			return nil, &resp.SimpleError{
+				Type:    resp.ERR,
+				Message: resp.ErrorMessageNotInteger,
+			}
+		}
+
+		value, ok := e.Value.(string)
+		if !ok {
+			return nil, &resp.SimpleError{
+				Type:    resp.ERR,
+				Message: resp.ErrorMessageNotInteger,
+			}
+		}
+		val, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, &resp.SimpleError{
+				Type:    resp.ERR,
+				Message: resp.ErrorMessageNotInteger,
+			}
+		}
+		e.Value = strconv.Itoa(val + 1)
+		return e, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	value, _ := e.Value.(string)
+	val, _ := strconv.Atoi(value)
+	i := resp.Integer{
+		Value: int64(val),
+	}
+	return i.Marshal(), nil
+}
+
+func (s *Server) HandleBLPop(req Request, c *Client) ([]byte, error) {
 	key := req.Arguments[0]
 	timeoutArg := req.Arguments[1]
 
@@ -64,7 +146,7 @@ func (s *Server) HandleBLPop(req Request) ([]byte, error) {
 	return res.Marshal(), nil
 }
 
-func (s *Server) HandleLLen(req Request) ([]byte, error) {
+func (s *Server) HandleLLen(req Request, c *Client) ([]byte, error) {
 	//find a list by its key
 	//if not exist return 0 length list
 	//check if its list
@@ -92,7 +174,7 @@ func (s *Server) HandleLLen(req Request) ([]byte, error) {
 	return result.Marshal(), nil
 }
 
-func (s *Server) HandleLPop(req Request) ([]byte, error) {
+func (s *Server) HandleLPop(req Request, c *Client) ([]byte, error) {
 	//check if length is given
 	//if not length is 1
 	//check if list exist or list have atleast 1 element
@@ -156,7 +238,7 @@ func (s *Server) HandleLPop(req Request) ([]byte, error) {
 	return arr.Marshal(), nil
 }
 
-func (s *Server) HandleLPush(req Request) ([]byte, error) {
+func (s *Server) HandleLPush(req Request, c *Client) ([]byte, error) {
 	listKey := req.Arguments[0]
 	values := make([]string, len(req.Arguments[1:]))
 	copy(values, req.Arguments[1:])
@@ -181,7 +263,7 @@ func normalizeIndex(idx int, listLen int) int {
 	}
 	return idx
 }
-func (s *Server) HandleLRange(req Request) ([]byte, error) {
+func (s *Server) HandleLRange(req Request, c *Client) ([]byte, error) {
 	listKey := req.Arguments[0]
 	startIdx, err := strconv.Atoi(req.Arguments[1])
 	if err != nil {
@@ -223,7 +305,7 @@ func (s *Server) HandleLRange(req Request) ([]byte, error) {
 	}
 	return arr.Marshal(), nil
 }
-func (s *Server) HandleRPush(req Request) ([]byte, error) {
+func (s *Server) HandleRPush(req Request, c *Client) ([]byte, error) {
 	listKey := req.Arguments[0]
 	values := req.Arguments[1:]
 	list, err := s.Store.ListPush(listKey, values, store.Right)
@@ -236,7 +318,7 @@ func (s *Server) HandleRPush(req Request) ([]byte, error) {
 	return result.Marshal(), nil
 }
 
-func (s *Server) HandleKeys(req Request) ([]byte, error) {
+func (s *Server) HandleKeys(req Request, c *Client) ([]byte, error) {
 	if req.Arguments[0] != "*" {
 		return nil, fmt.Errorf("we do not support regex/pattern other then *")
 	}
@@ -263,7 +345,7 @@ func (s *Server) getConfig(key string) (string, bool) {
 	}
 	return "", false
 }
-func (s *Server) HandleConfig(req Request) ([]byte, error) {
+func (s *Server) HandleConfig(req Request, c *Client) ([]byte, error) {
 
 	if strings.ToLower(req.Arguments[0]) != "get" {
 		return nil, fmt.Errorf("invalid parameter for command config")
@@ -283,7 +365,7 @@ func (s *Server) HandleConfig(req Request) ([]byte, error) {
 	return data, nil
 }
 
-func (s *Server) HandlePing(req Request) ([]byte, error) {
+func (s *Server) HandlePing(req Request, c *Client) ([]byte, error) {
 	ss := &resp.SimpleString{
 		Value: "PONG",
 	}
@@ -291,14 +373,14 @@ func (s *Server) HandlePing(req Request) ([]byte, error) {
 	return ss.Marshal(), nil
 }
 
-func (s *Server) HandleEcho(req Request) ([]byte, error) {
+func (s *Server) HandleEcho(req Request, c *Client) ([]byte, error) {
 	bs := &resp.BulkString{
 		Value: req.Arguments[0],
 	}
 	data := bs.Marshal()
 	return data, nil
 }
-func (s *Server) HandleSet(req Request) ([]byte, error) {
+func (s *Server) HandleSet(req Request, c *Client) ([]byte, error) {
 	key := req.Arguments[0]
 	value := req.Arguments[1]
 	var expireAt time.Time
@@ -352,7 +434,7 @@ func (s *Server) HandleSet(req Request) ([]byte, error) {
 	return ss.Marshal(), nil
 }
 
-func (s *Server) HandleGet(req Request) ([]byte, error) {
+func (s *Server) HandleGet(req Request, c *Client) ([]byte, error) {
 	key := req.Arguments[0]
 	entry, ok := s.Store.Get(key)
 	if !ok {
@@ -377,5 +459,3 @@ func (s *Server) HandleGet(req Request) ([]byte, error) {
 	data := bs.Marshal()
 	return data, nil
 }
-
-type Command string
