@@ -11,3 +11,4 @@ test_result.txt
 
 # Docs (kept locally, not version controlled)
 *.md
+!README.md
