@@ -2,9 +2,7 @@ package tests
 
 import (
 	"bufio"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -14,28 +12,9 @@ import (
 // None of SADD, SMEMBERS, SISMEMBER, SCARD, SREM are implemented yet, so all
 // tests here are gated behind TINYRED_CUSTOM_SETS_STAGE and skip by default.
 
-const defaultMaxCustomSetsStage = 0
-
-func maxCustomSetsStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_SETS_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomSetsStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomSetsStage
-	}
-	if v > 5 {
-		return 5
-	}
-	return v
-}
-
-func requireCustomSetsStage(t *testing.T, stage int) {
+func requireCustomSetsStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomSetsStage() {
-		t.Skipf("skipping custom sets stage %d test; set TINYRED_CUSTOM_SETS_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomSets)
 }
 
 // customSetsSortedCopy returns a sorted copy of elems, leaving the input untouched.
@@ -60,7 +39,7 @@ func customSetsReadRESPError(t *testing.T, r *bufio.Reader) string {
 // --- Stage 1: SADD ---
 
 func TestSAddNewMemberReturnsOne_Stage01SAdd(t *testing.T) {
-	requireCustomSetsStage(t, 1)
+	requireCustomSetsStage(t)
 	// Scenario: SADD on a brand-new set with a single member reports 1 new member.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -73,7 +52,7 @@ func TestSAddNewMemberReturnsOne_Stage01SAdd(t *testing.T) {
 }
 
 func TestSAddMixOfExistingAndNewMembersCountsOnlyNew_Stage01SAdd(t *testing.T) {
-	requireCustomSetsStage(t, 1)
+	requireCustomSetsStage(t)
 	// Scenario: SADD with a mix of an already-present member and a new one only
 	// counts the newly added member.
 	sp := startTinyRed(t)
@@ -93,7 +72,7 @@ func TestSAddMixOfExistingAndNewMembersCountsOnlyNew_Stage01SAdd(t *testing.T) {
 }
 
 func TestSAddDuplicateMemberReturnsZero_Stage01SAdd(t *testing.T) {
-	requireCustomSetsStage(t, 1)
+	requireCustomSetsStage(t)
 	// Scenario: re-adding an already-present member reports zero newly added members.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -112,7 +91,7 @@ func TestSAddDuplicateMemberReturnsZero_Stage01SAdd(t *testing.T) {
 }
 
 func TestSAddOnStringKeyReturnsWrongType_Stage01SAdd(t *testing.T) {
-	requireCustomSetsStage(t, 1)
+	requireCustomSetsStage(t)
 	// Scenario: SADD against a key holding a string value must fail with a
 	// WRONGTYPE error rather than silently converting or corrupting the value.
 	sp := startTinyRed(t)
@@ -133,7 +112,7 @@ func TestSAddOnStringKeyReturnsWrongType_Stage01SAdd(t *testing.T) {
 // --- Stage 2: SMEMBERS ---
 
 func TestSMembersReturnsAllAddedMembers_Stage02SMembers(t *testing.T) {
-	requireCustomSetsStage(t, 2)
+	requireCustomSetsStage(t)
 	// Scenario: SMEMBERS returns exactly the members added via SADD, order-independent.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -151,7 +130,7 @@ func TestSMembersReturnsAllAddedMembers_Stage02SMembers(t *testing.T) {
 }
 
 func TestSMembersOnMissingSetReturnsEmptyArray_Stage02SMembers(t *testing.T) {
-	requireCustomSetsStage(t, 2)
+	requireCustomSetsStage(t)
 	// Scenario: SMEMBERS on a key that was never created returns an empty array,
 	// not an error.
 	sp := startTinyRed(t)
@@ -167,7 +146,7 @@ func TestSMembersOnMissingSetReturnsEmptyArray_Stage02SMembers(t *testing.T) {
 // --- Stage 3: SISMEMBER ---
 
 func TestSIsMemberOnPresentMemberReturnsOne_Stage03SIsMember(t *testing.T) {
-	requireCustomSetsStage(t, 3)
+	requireCustomSetsStage(t)
 	// Scenario: SISMEMBER reports 1 for a member that was added to the set.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -186,7 +165,7 @@ func TestSIsMemberOnPresentMemberReturnsOne_Stage03SIsMember(t *testing.T) {
 }
 
 func TestSIsMemberOnAbsentMemberReturnsZero_Stage03SIsMember(t *testing.T) {
-	requireCustomSetsStage(t, 3)
+	requireCustomSetsStage(t)
 	// Scenario: SISMEMBER reports 0 for a member never added to an existing set.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -202,7 +181,7 @@ func TestSIsMemberOnAbsentMemberReturnsZero_Stage03SIsMember(t *testing.T) {
 }
 
 func TestSIsMemberOnMissingSetReturnsZero_Stage03SIsMember(t *testing.T) {
-	requireCustomSetsStage(t, 3)
+	requireCustomSetsStage(t)
 	// Scenario: SISMEMBER against a key that doesn't exist at all reports 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -217,7 +196,7 @@ func TestSIsMemberOnMissingSetReturnsZero_Stage03SIsMember(t *testing.T) {
 // --- Stage 4: SCARD ---
 
 func TestSCardReturnsMemberCount_Stage04SCard(t *testing.T) {
-	requireCustomSetsStage(t, 4)
+	requireCustomSetsStage(t)
 	// Scenario: SCARD reports the number of distinct members in an existing set.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -233,7 +212,7 @@ func TestSCardReturnsMemberCount_Stage04SCard(t *testing.T) {
 }
 
 func TestSCardOnMissingSetReturnsZero_Stage04SCard(t *testing.T) {
-	requireCustomSetsStage(t, 4)
+	requireCustomSetsStage(t)
 	// Scenario: SCARD on a nonexistent key reports 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -248,7 +227,7 @@ func TestSCardOnMissingSetReturnsZero_Stage04SCard(t *testing.T) {
 // --- Stage 5: SREM ---
 
 func TestSRemRemovesOnlyPresentMembers_Stage05SRem(t *testing.T) {
-	requireCustomSetsStage(t, 5)
+	requireCustomSetsStage(t)
 	// Scenario: SREM with one present and one absent member removes only the
 	// present one and counts just that removal.
 	sp := startTinyRed(t)
@@ -273,7 +252,7 @@ func TestSRemRemovesOnlyPresentMembers_Stage05SRem(t *testing.T) {
 }
 
 func TestSRemOnMissingSetReturnsZero_Stage05SRem(t *testing.T) {
-	requireCustomSetsStage(t, 5)
+	requireCustomSetsStage(t)
 	// Scenario: SREM against a key that doesn't exist reports 0 removed members.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)

@@ -3,34 +3,14 @@ package tests
 import (
 	"bufio"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-const defaultMaxSortedSetStage = 0
-
-func maxSortedSetStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_SORTEDSET_STAGE"))
-	if raw == "" {
-		return defaultMaxSortedSetStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxSortedSetStage
-	}
-	if v > 8 {
-		return 8
-	}
-	return v
-}
-
-func requireSortedSetStage(t *testing.T, stage int) {
+func requireSortedSetStage(t *testing.T) {
 	t.Helper()
-	if stage > maxSortedSetStage() {
-		t.Skipf("skipping sorted set stage %d test; set TINYRED_SORTEDSET_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseSortedSets)
 }
 
 // zsetReadIntOrNilBulk reads a response that is either a RESP integer (e.g.
@@ -90,7 +70,7 @@ func zsetAssertScoreEqual(t *testing.T, got string, want float64) {
 // --- Stage 1: ZADD creates a new sorted set ---
 
 func TestZAddCreatesNewSortedSet_Stage01ZAddCreate(t *testing.T) {
-	requireSortedSetStage(t, 1)
+	requireSortedSetStage(t)
 	// Scenario: ZADD on a brand-new key creates the sorted set and reports one new member added.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -105,7 +85,7 @@ func TestZAddCreatesNewSortedSet_Stage01ZAddCreate(t *testing.T) {
 // --- Stage 2: ZADD adds members to an existing sorted set ---
 
 func TestZAddAddsNewMembersAndUpdatesExistingMember_Stage02ZAddMultipleMembers(t *testing.T) {
-	requireSortedSetStage(t, 2)
+	requireSortedSetStage(t)
 	// Scenario: ZADD reports 1 for each newly added member, and 0 when only updating an existing member's score.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -137,7 +117,7 @@ func TestZAddAddsNewMembersAndUpdatesExistingMember_Stage02ZAddMultipleMembers(t
 // --- Stage 3: ZRANK ---
 
 func TestZRankOrdersByScoreWithLexicographicTiebreak_Stage03ZRank(t *testing.T) {
-	requireSortedSetStage(t, 3)
+	requireSortedSetStage(t)
 	// Scenario: ZRANK returns the 0-based rank ordered by ascending score, ties broken lexicographically.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -180,7 +160,7 @@ func TestZRankOrdersByScoreWithLexicographicTiebreak_Stage03ZRank(t *testing.T) 
 }
 
 func TestZRankReturnsNullForMissingMemberOrKey_Stage03ZRank(t *testing.T) {
-	requireSortedSetStage(t, 3)
+	requireSortedSetStage(t)
 	// Scenario: ZRANK returns a null bulk string when the member or the sorted set itself is missing.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -204,7 +184,7 @@ func TestZRankReturnsNullForMissingMemberOrKey_Stage03ZRank(t *testing.T) {
 // --- Stage 4: ZRANGE with non-negative indexes ---
 
 func TestZRangeWithNonNegativeIndexesReturnsSliceOrderedByScore_Stage04ZRange(t *testing.T) {
-	requireSortedSetStage(t, 4)
+	requireSortedSetStage(t)
 	// Scenario: ZRANGE with non-negative start/stop returns members ordered by ascending score (ties lexicographic).
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -233,7 +213,7 @@ func TestZRangeWithNonNegativeIndexesReturnsSliceOrderedByScore_Stage04ZRange(t 
 }
 
 func TestZRangeOnMissingKeyReturnsEmptyArray_Stage04ZRange(t *testing.T) {
-	requireSortedSetStage(t, 4)
+	requireSortedSetStage(t)
 	// Scenario: ZRANGE on a non-existent key returns an empty array.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -248,7 +228,7 @@ func TestZRangeOnMissingKeyReturnsEmptyArray_Stage04ZRange(t *testing.T) {
 // --- Stage 5: ZRANGE with negative indexes ---
 
 func TestZRangeWithNegativeIndexes_Stage05ZRange(t *testing.T) {
-	requireSortedSetStage(t, 5)
+	requireSortedSetStage(t)
 	// Scenario: ZRANGE supports negative indexes counting from the end of the ordered set.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -279,7 +259,7 @@ func TestZRangeWithNegativeIndexes_Stage05ZRange(t *testing.T) {
 // --- Stage 6: ZCARD ---
 
 func TestZCardReturnsMemberCountAndIsUnaffectedByScoreUpdates_Stage06ZCard(t *testing.T) {
-	requireSortedSetStage(t, 6)
+	requireSortedSetStage(t)
 	// Scenario: ZCARD returns the number of members, which does not change when an existing member's score is updated.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -318,7 +298,7 @@ func TestZCardReturnsMemberCountAndIsUnaffectedByScoreUpdates_Stage06ZCard(t *te
 }
 
 func TestZCardOnMissingKeyReturnsZero_Stage06ZCard(t *testing.T) {
-	requireSortedSetStage(t, 6)
+	requireSortedSetStage(t)
 	// Scenario: ZCARD on a non-existent key returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -333,7 +313,7 @@ func TestZCardOnMissingKeyReturnsZero_Stage06ZCard(t *testing.T) {
 // --- Stage 7: ZSCORE ---
 
 func TestZScoreReturnsMemberScoreAndReflectsUpdates_Stage07ZScore(t *testing.T) {
-	requireSortedSetStage(t, 7)
+	requireSortedSetStage(t)
 	// Scenario: ZSCORE returns the current score of a member, reflecting subsequent score updates.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -374,7 +354,7 @@ func TestZScoreReturnsMemberScoreAndReflectsUpdates_Stage07ZScore(t *testing.T) 
 }
 
 func TestZScoreReturnsNullForMissingMemberOrKey_Stage07ZScore(t *testing.T) {
-	requireSortedSetStage(t, 7)
+	requireSortedSetStage(t)
 	// Scenario: ZSCORE returns a null bulk string when the member or the sorted set itself is missing.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -398,7 +378,7 @@ func TestZScoreReturnsNullForMissingMemberOrKey_Stage07ZScore(t *testing.T) {
 // --- Stage 8: ZREM ---
 
 func TestZRemRemovesMemberAndReturnsZeroForMissingMember_Stage08ZRem(t *testing.T) {
-	requireSortedSetStage(t, 8)
+	requireSortedSetStage(t)
 	// Scenario: ZREM removes an existing member (returning 1), updates ordering seen via ZRANGE, and returns 0 for a member that doesn't exist.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)

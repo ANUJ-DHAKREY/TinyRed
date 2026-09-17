@@ -1,35 +1,13 @@
 package tests
 
 import (
-	"os"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
 
-const defaultMaxCustomActiveExpiryStage = 0
-
-func maxCustomActiveExpiryStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_ACTIVE_EXPIRY_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomActiveExpiryStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomActiveExpiryStage
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
-}
-
-func requireCustomActiveExpiryStage(t *testing.T, stage int) {
+func requireCustomActiveExpiryStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomActiveExpiryStage() {
-		t.Skipf("skipping custom active-expiry stage %d test; set TINYRED_CUSTOM_ACTIVE_EXPIRY_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomActiveExpiry)
 }
 
 // customActiveExpiryContains reports whether needle is present in haystack.
@@ -43,7 +21,7 @@ func customActiveExpiryContains(haystack []string, needle string) bool {
 }
 
 func TestExpiredKeyDisappearsFromKeysWithoutBeingRead_Stage01BackgroundSweep(t *testing.T) {
-	requireCustomActiveExpiryStage(t, 1)
+	requireCustomActiveExpiryStage(t)
 	// Scenario: a key set with a short TTL should be proactively removed by a background
 	// sweep and vanish from KEYS * even though it is never read (GET is never called here) —
 	// proving removal isn't just the pre-existing lazy expiry-on-access path.
@@ -71,7 +49,7 @@ func TestExpiredKeyDisappearsFromKeysWithoutBeingRead_Stage01BackgroundSweep(t *
 }
 
 func TestActiveSweepOnlyRemovesExpiredKeysAndLeavesOthersIntact_Stage01SelectiveSweep(t *testing.T) {
-	requireCustomActiveExpiryStage(t, 1)
+	requireCustomActiveExpiryStage(t)
 	// Scenario: mix short-TTL keys with persistent (no expiry) and longer-TTL keys. After
 	// waiting past the short TTLs, the sweep should have removed only the short-TTL keys,
 	// leaving persistent and longer-TTL keys present in KEYS *.

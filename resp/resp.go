@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"time"
 )
 
 const (
@@ -28,17 +27,6 @@ var TypeSymbols = map[string]byte{
 	TypeBulkError:    '(',
 }
 
-const (
-	EntryTypeString string = "string"
-	EntryTypeList   string = "list"
-)
-
-type Entry struct {
-	Type     string
-	Value    any // holds string, []string, map[string]string, etc.
-	ExpireAt time.Time
-}
-
 type ErrorType string
 
 const (
@@ -56,6 +44,7 @@ const (
 	ErrorMessageWrongType  string = "Operation against a key holding the wrong kind of value"
 	ErrorMessageNotInteger string = "value is not an integer or out of range"
 	ErrorMessageNotNumber  string = "value is not an number"
+	ErrorMessageNotFloat   string = "value is not float or out of range"
 )
 
 type RespType interface {

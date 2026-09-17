@@ -2,35 +2,13 @@ package tests
 
 import (
 	"bufio"
-	"os"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
 
-const defaultMaxCustomTTLStage = 0
-
-func maxCustomTTLStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_TTL_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomTTLStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomTTLStage
-	}
-	if v > 5 {
-		return 5
-	}
-	return v
-}
-
-func requireCustomTTLStage(t *testing.T, stage int) {
+func requireCustomTTLStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomTTLStage() {
-		t.Skipf("skipping custom TTL stage %d test; set TINYRED_CUSTOM_TTL_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomTTL)
 }
 
 // customTTLReadRESPIntegerInRange reads a RESP integer and asserts it falls within [min, max] inclusive.
@@ -46,7 +24,7 @@ func customTTLReadRESPIntegerInRange(t *testing.T, r *bufio.Reader, min, max int
 // --- Stage 1: EXPIRE ---
 
 func TestExpireSetsTTLOnExistingKey_Stage01Expire(t *testing.T) {
-	requireCustomTTLStage(t, 1)
+	requireCustomTTLStage(t)
 	// Scenario: EXPIRE on an existing key sets a TTL and returns 1.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -64,7 +42,7 @@ func TestExpireSetsTTLOnExistingKey_Stage01Expire(t *testing.T) {
 }
 
 func TestExpireOnMissingKeyReturnsZero_Stage01Expire(t *testing.T) {
-	requireCustomTTLStage(t, 1)
+	requireCustomTTLStage(t)
 	// Scenario: EXPIRE on a non-existent key returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -77,7 +55,7 @@ func TestExpireOnMissingKeyReturnsZero_Stage01Expire(t *testing.T) {
 }
 
 func TestExpireInSecondsActuallyExpiresKey_Stage01Expire(t *testing.T) {
-	requireCustomTTLStage(t, 1)
+	requireCustomTTLStage(t)
 	// Scenario: EXPIRE's unit is genuinely seconds; after the TTL elapses the key is gone.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -104,7 +82,7 @@ func TestExpireInSecondsActuallyExpiresKey_Stage01Expire(t *testing.T) {
 // --- Stage 2: PEXPIRE ---
 
 func TestPExpireSetsTTLOnExistingKey_Stage02PExpire(t *testing.T) {
-	requireCustomTTLStage(t, 2)
+	requireCustomTTLStage(t)
 	// Scenario: PEXPIRE on an existing key sets a millisecond TTL and returns 1.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -122,7 +100,7 @@ func TestPExpireSetsTTLOnExistingKey_Stage02PExpire(t *testing.T) {
 }
 
 func TestPExpireExpiresKeyAfterMilliseconds_Stage02PExpire(t *testing.T) {
-	requireCustomTTLStage(t, 2)
+	requireCustomTTLStage(t)
 	// Scenario: key is present immediately after PEXPIRE, then expires once the millisecond TTL elapses.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -152,7 +130,7 @@ func TestPExpireExpiresKeyAfterMilliseconds_Stage02PExpire(t *testing.T) {
 }
 
 func TestPExpireOnMissingKeyReturnsZero_Stage02PExpire(t *testing.T) {
-	requireCustomTTLStage(t, 2)
+	requireCustomTTLStage(t)
 	// Scenario: PEXPIRE on a non-existent key returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -167,7 +145,7 @@ func TestPExpireOnMissingKeyReturnsZero_Stage02PExpire(t *testing.T) {
 // --- Stage 3: TTL ---
 
 func TestTTLReportsNoExpiryThenSecondsAfterExpire_Stage03TTL(t *testing.T) {
-	requireCustomTTLStage(t, 3)
+	requireCustomTTLStage(t)
 	// Scenario: TTL is -1 before any expiry is set, then reflects the remaining seconds after EXPIRE.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -194,7 +172,7 @@ func TestTTLReportsNoExpiryThenSecondsAfterExpire_Stage03TTL(t *testing.T) {
 }
 
 func TestTTLOnMissingKeyReturnsNegativeTwo_Stage03TTL(t *testing.T) {
-	requireCustomTTLStage(t, 3)
+	requireCustomTTLStage(t)
 	// Scenario: TTL on a non-existent key returns -2.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -209,7 +187,7 @@ func TestTTLOnMissingKeyReturnsNegativeTwo_Stage03TTL(t *testing.T) {
 // --- Stage 4: PTTL ---
 
 func TestPTTLReportsRemainingMillisecondsForKeyWithPXExpiry_Stage04PTTL(t *testing.T) {
-	requireCustomTTLStage(t, 4)
+	requireCustomTTLStage(t)
 	// Scenario: PTTL on a key set with SET ... PX returns the remaining TTL in milliseconds.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -227,7 +205,7 @@ func TestPTTLReportsRemainingMillisecondsForKeyWithPXExpiry_Stage04PTTL(t *testi
 }
 
 func TestPTTLOnMissingKeyReturnsNegativeTwo_Stage04PTTL(t *testing.T) {
-	requireCustomTTLStage(t, 4)
+	requireCustomTTLStage(t)
 	// Scenario: PTTL on a non-existent key returns -2.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -240,7 +218,7 @@ func TestPTTLOnMissingKeyReturnsNegativeTwo_Stage04PTTL(t *testing.T) {
 }
 
 func TestPTTLOnKeyWithoutExpiryReturnsNegativeOne_Stage04PTTL(t *testing.T) {
-	requireCustomTTLStage(t, 4)
+	requireCustomTTLStage(t)
 	// Scenario: PTTL on a key with no expiry returns -1.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -260,7 +238,7 @@ func TestPTTLOnKeyWithoutExpiryReturnsNegativeOne_Stage04PTTL(t *testing.T) {
 // --- Stage 5: PERSIST ---
 
 func TestPersistRemovesExpiryFromKey_Stage05Persist(t *testing.T) {
-	requireCustomTTLStage(t, 5)
+	requireCustomTTLStage(t)
 	// Scenario: PERSIST removes a key's TTL, confirmed via TTL returning -1 afterward.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -284,7 +262,7 @@ func TestPersistRemovesExpiryFromKey_Stage05Persist(t *testing.T) {
 }
 
 func TestPersistOnAlreadyPersistentKeyReturnsZero_Stage05Persist(t *testing.T) {
-	requireCustomTTLStage(t, 5)
+	requireCustomTTLStage(t)
 	// Scenario: calling PERSIST again on a key with no expiry left to remove returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -308,7 +286,7 @@ func TestPersistOnAlreadyPersistentKeyReturnsZero_Stage05Persist(t *testing.T) {
 }
 
 func TestPersistOnMissingKeyReturnsZero_Stage05Persist(t *testing.T) {
-	requireCustomTTLStage(t, 5)
+	requireCustomTTLStage(t)
 	// Scenario: PERSIST on a non-existent key returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)

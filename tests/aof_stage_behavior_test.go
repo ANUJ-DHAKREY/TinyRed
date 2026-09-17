@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,28 +12,9 @@ import (
 // defaultMaxAOFStage is 0 because none of the AOF persistence stages are
 // implemented in the server yet; all AOF tests skip by default until the
 // server grows the corresponding feature (set TINYRED_AOF_STAGE to opt in).
-const defaultMaxAOFStage = 0
-
-func maxAOFStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_AOF_STAGE"))
-	if raw == "" {
-		return defaultMaxAOFStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxAOFStage
-	}
-	if v > 10 {
-		return 10
-	}
-	return v
-}
-
-func requireAOFStage(t *testing.T, stage int) {
+func requireAOFStage(t *testing.T) {
 	t.Helper()
-	if stage > maxAOFStage() {
-		t.Skipf("skipping AOF stage %d test; set TINYRED_AOF_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseAOF)
 }
 
 // waitForPath polls until os.Stat(path) succeeds (or fails after timeout),
@@ -105,7 +85,7 @@ func aofReadConfig(t *testing.T, r *bufio.Reader) []string {
 // ========== Stage 1: Default AOF Options ==========
 
 func TestConfigGetReturnsDefaultAOFOptions_Stage01DefaultOptions(t *testing.T) {
-	requireAOFStage(t, 1)
+	requireAOFStage(t)
 	// Scenario: with no AOF-related flags, CONFIG GET returns the documented
 	// default values for appendonly/appenddirname/appendfilename/appendfsync.
 	sp := startTinyRed(t)
@@ -139,7 +119,7 @@ func TestConfigGetReturnsDefaultAOFOptions_Stage01DefaultOptions(t *testing.T) {
 // ========== Stage 2: AOF Options from Flags ==========
 
 func TestConfigGetReflectsAOFFlags_Stage02OptionsFromFlags(t *testing.T) {
-	requireAOFStage(t, 2)
+	requireAOFStage(t)
 	// Scenario: --appendonly yes and --appenddirname mydir override the defaults.
 	sp := startTinyRedWithArgs(t, "--appendonly", "yes", "--appenddirname", "mydir")
 	conn, r := dialClient(t, sp)
@@ -160,7 +140,7 @@ func TestConfigGetReflectsAOFFlags_Stage02OptionsFromFlags(t *testing.T) {
 // ========== Stage 3: Create Append-Only Directory ==========
 
 func TestAppendOnlyDirectoryCreatedWhenEnabled_Stage03CreateAppendDir(t *testing.T) {
-	requireAOFStage(t, 3)
+	requireAOFStage(t)
 	// Scenario: starting with --appendonly yes creates <dir>/appendonlydir/.
 	dir := t.TempDir()
 	sp := startTinyRedWithArgs(t, "--dir", dir, "--appendonly", "yes")
@@ -173,7 +153,7 @@ func TestAppendOnlyDirectoryCreatedWhenEnabled_Stage03CreateAppendDir(t *testing
 }
 
 func TestAppendOnlyDirectoryNotCreatedWhenDisabled_Stage03CreateAppendDir(t *testing.T) {
-	requireAOFStage(t, 3)
+	requireAOFStage(t)
 	// Scenario: without --appendonly yes, no append-only directory is created.
 	dir := t.TempDir()
 	sp := startTinyRedWithArgs(t, "--dir", dir, "--appendonly", "no")
@@ -185,7 +165,7 @@ func TestAppendOnlyDirectoryNotCreatedWhenDisabled_Stage03CreateAppendDir(t *tes
 // ========== Stage 4: Create Append-Only File ==========
 
 func TestAppendOnlyFileCreatedEmpty_Stage04CreateAppendFile(t *testing.T) {
-	requireAOFStage(t, 4)
+	requireAOFStage(t)
 	// Scenario: starting with --appendonly yes creates an empty incr AOF file.
 	dir := t.TempDir()
 	sp := startTinyRedWithArgs(t, "--dir", dir, "--appendonly", "yes")
@@ -204,7 +184,7 @@ func TestAppendOnlyFileCreatedEmpty_Stage04CreateAppendFile(t *testing.T) {
 // ========== Stage 5: Create Manifest File ==========
 
 func TestManifestFileCreatedWithExpectedContents_Stage05CreateManifest(t *testing.T) {
-	requireAOFStage(t, 5)
+	requireAOFStage(t)
 	// Scenario: starting with --appendonly yes creates a manifest file pointing
 	// at the seq-1 incr AOF file.
 	dir := t.TempDir()
@@ -231,7 +211,7 @@ func TestManifestFileCreatedWithExpectedContents_Stage05CreateManifest(t *testin
 // ========== Stage 6: Write a Single Command ==========
 
 func TestSingleWriteCommandAppendedToAOF_Stage06WriteSingleCommand(t *testing.T) {
-	requireAOFStage(t, 6)
+	requireAOFStage(t)
 	// Scenario: SET foo 100 is appended to the AOF file in RESP format.
 	dir := t.TempDir()
 	sp := startTinyRedWithArgs(t, "--dir", dir, "--appendonly", "yes", "--appendfsync", "always")
@@ -253,7 +233,7 @@ func TestSingleWriteCommandAppendedToAOF_Stage06WriteSingleCommand(t *testing.T)
 // ========== Stage 7: Write Multiple Commands ==========
 
 func TestMultipleWriteCommandsAppendedInOrder_Stage07WriteMultipleCommands(t *testing.T) {
-	requireAOFStage(t, 7)
+	requireAOFStage(t)
 	// Scenario: two SET commands are appended to the AOF file, concatenated
 	// in the order they were issued.
 	dir := t.TempDir()
@@ -281,7 +261,7 @@ func TestMultipleWriteCommandsAppendedInOrder_Stage07WriteMultipleCommands(t *te
 // ========== Stage 8: Filter Write Commands ==========
 
 func TestOnlyWriteCommandsAppendedToAOF_Stage08FilterWriteCommands(t *testing.T) {
-	requireAOFStage(t, 8)
+	requireAOFStage(t)
 	// Scenario: SET is logged to the AOF file, but GET/PING/ECHO (read-only or
 	// non-persisting commands) are filtered out.
 	dir := t.TempDir()
@@ -329,7 +309,7 @@ func TestOnlyWriteCommandsAppendedToAOF_Stage08FilterWriteCommands(t *testing.T)
 // ========== Stage 9: Replay a Single Command ==========
 
 func TestReplaySingleCommandFromAOFOnStartup_Stage09ReplaySingleCommand(t *testing.T) {
-	requireAOFStage(t, 9)
+	requireAOFStage(t)
 	// Scenario: a pre-existing manifest + incr AOF file encoding SET foo bar
 	// is replayed into memory when the server starts.
 	dir := t.TempDir()
@@ -360,7 +340,7 @@ func TestReplaySingleCommandFromAOFOnStartup_Stage09ReplaySingleCommand(t *testi
 // ========== Stage 10: Replay Multiple Commands ==========
 
 func TestReplayMultipleCommandsFromAOFOnStartup_Stage10ReplayMultipleCommands(t *testing.T) {
-	requireAOFStage(t, 10)
+	requireAOFStage(t)
 	// Scenario: a pre-existing incr AOF file encoding two SET commands is
 	// fully replayed (RESP framing needs no separators between commands).
 	dir := t.TempDir()

@@ -3,35 +3,15 @@ package tests
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-const defaultMaxListStage = 11
-
-func maxListStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_LIST_STAGE"))
-	if raw == "" {
-		return defaultMaxListStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxListStage
-	}
-	if v > 11 {
-		return 11
-	}
-	return v
-}
-
-func requireListStage(t *testing.T, stage int) {
+func requireListStage(t *testing.T) {
 	t.Helper()
-	if stage > maxListStage() {
-		t.Skipf("skipping list stage %d test; set TINYRED_LIST_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseLists)
 }
 
 // readRESPInteger reads a RESP integer response (e.g. ":3\r\n") and returns the integer value.
@@ -93,7 +73,7 @@ func readRESPBulkStringValue(t *testing.T, r *bufio.Reader) string {
 // --- Stage 1: RPUSH creates a new list ---
 
 func TestRPushCreatesNewListWithSingleElement_Stage01(t *testing.T) {
-	requireListStage(t, 1)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -105,7 +85,7 @@ func TestRPushCreatesNewListWithSingleElement_Stage01(t *testing.T) {
 }
 
 func TestRPushCreatesNewListDifferentKeys_Stage01(t *testing.T) {
-	requireListStage(t, 1)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -125,7 +105,7 @@ func TestRPushCreatesNewListDifferentKeys_Stage01(t *testing.T) {
 // --- Stage 2: RPUSH appends to an existing list ---
 
 func TestRPushAppendsToExistingList_Stage02(t *testing.T) {
-	requireListStage(t, 2)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -149,7 +129,7 @@ func TestRPushAppendsToExistingList_Stage02(t *testing.T) {
 }
 
 func TestRPushAppendsMultipleCallsSameList_Stage02(t *testing.T) {
-	requireListStage(t, 2)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -165,7 +145,7 @@ func TestRPushAppendsMultipleCallsSameList_Stage02(t *testing.T) {
 // --- Stage 3: RPUSH with multiple elements ---
 
 func TestRPushMultipleElementsNewList_Stage03(t *testing.T) {
-	requireListStage(t, 3)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -177,7 +157,7 @@ func TestRPushMultipleElementsNewList_Stage03(t *testing.T) {
 }
 
 func TestRPushMultipleElementsExistingList_Stage03(t *testing.T) {
-	requireListStage(t, 3)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -197,7 +177,7 @@ func TestRPushMultipleElementsExistingList_Stage03(t *testing.T) {
 // --- Stage 4: LRANGE with positive indexes ---
 
 func TestLRangeBasicSubset_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -213,7 +193,7 @@ func TestLRangeBasicSubset_Stage04(t *testing.T) {
 }
 
 func TestLRangeMiddleSubset_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -229,7 +209,7 @@ func TestLRangeMiddleSubset_Stage04(t *testing.T) {
 }
 
 func TestLRangeStopBeyondLength_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -245,7 +225,7 @@ func TestLRangeStopBeyondLength_Stage04(t *testing.T) {
 }
 
 func TestLRangeStartBeyondLength_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -260,7 +240,7 @@ func TestLRangeStartBeyondLength_Stage04(t *testing.T) {
 }
 
 func TestLRangeStartGreaterThanStop_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -275,7 +255,7 @@ func TestLRangeStartGreaterThanStop_Stage04(t *testing.T) {
 }
 
 func TestLRangeNonExistentList_Stage04(t *testing.T) {
-	requireListStage(t, 4)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -289,7 +269,7 @@ func TestLRangeNonExistentList_Stage04(t *testing.T) {
 // --- Stage 5: LRANGE with negative indexes ---
 
 func TestLRangeNegativeEnd_Stage05(t *testing.T) {
-	requireListStage(t, 5)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -305,7 +285,7 @@ func TestLRangeNegativeEnd_Stage05(t *testing.T) {
 }
 
 func TestLRangePositiveStartNegativeEnd_Stage05(t *testing.T) {
-	requireListStage(t, 5)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -321,7 +301,7 @@ func TestLRangePositiveStartNegativeEnd_Stage05(t *testing.T) {
 }
 
 func TestLRangeMixedStartNegativeEnd_Stage05(t *testing.T) {
-	requireListStage(t, 5)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -337,7 +317,7 @@ func TestLRangeMixedStartNegativeEnd_Stage05(t *testing.T) {
 }
 
 func TestLRangeNegativeOutOfRange_Stage05(t *testing.T) {
-	requireListStage(t, 5)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -354,7 +334,7 @@ func TestLRangeNegativeOutOfRange_Stage05(t *testing.T) {
 }
 
 func TestLRangeAllElementsWithNegativeIndex_Stage05(t *testing.T) {
-	requireListStage(t, 5)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -372,7 +352,7 @@ func TestLRangeAllElementsWithNegativeIndex_Stage05(t *testing.T) {
 // --- Stage 6: LPUSH ---
 
 func TestLPushSingleElement_Stage06(t *testing.T) {
-	requireListStage(t, 6)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -384,7 +364,7 @@ func TestLPushSingleElement_Stage06(t *testing.T) {
 }
 
 func TestLPushMultipleElements_Stage06(t *testing.T) {
-	requireListStage(t, 6)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -410,7 +390,7 @@ func TestLPushMultipleElements_Stage06(t *testing.T) {
 }
 
 func TestLPushCreatesNewList_Stage06(t *testing.T) {
-	requireListStage(t, 6)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -432,7 +412,7 @@ func TestLPushCreatesNewList_Stage06(t *testing.T) {
 // --- Stage 7: LLEN ---
 
 func TestLLenExistingList_Stage07(t *testing.T) {
-	requireListStage(t, 7)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -447,7 +427,7 @@ func TestLLenExistingList_Stage07(t *testing.T) {
 }
 
 func TestLLenNonExistentList_Stage07(t *testing.T) {
-	requireListStage(t, 7)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -459,7 +439,7 @@ func TestLLenNonExistentList_Stage07(t *testing.T) {
 }
 
 func TestLLenAfterMultiplePushes_Stage07(t *testing.T) {
-	requireListStage(t, 7)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -479,7 +459,7 @@ func TestLLenAfterMultiplePushes_Stage07(t *testing.T) {
 // --- Stage 8: LPOP single element ---
 
 func TestLPopSingleElement_Stage08(t *testing.T) {
-	requireListStage(t, 8)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -494,7 +474,7 @@ func TestLPopSingleElement_Stage08(t *testing.T) {
 }
 
 func TestLPopVerifiesRemainingElements_Stage08(t *testing.T) {
-	requireListStage(t, 8)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -513,7 +493,7 @@ func TestLPopVerifiesRemainingElements_Stage08(t *testing.T) {
 }
 
 func TestLPopEmptyList_Stage08(t *testing.T) {
-	requireListStage(t, 8)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -525,7 +505,7 @@ func TestLPopEmptyList_Stage08(t *testing.T) {
 }
 
 func TestLPopMultipleCallsDrainsList_Stage08(t *testing.T) {
-	requireListStage(t, 8)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -560,7 +540,7 @@ func TestLPopMultipleCallsDrainsList_Stage08(t *testing.T) {
 // --- Stage 9: LPOP with count argument ---
 
 func TestLPopWithCount_Stage09(t *testing.T) {
-	requireListStage(t, 9)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -576,7 +556,7 @@ func TestLPopWithCount_Stage09(t *testing.T) {
 }
 
 func TestLPopWithCountVerifiesRemaining_Stage09(t *testing.T) {
-	requireListStage(t, 9)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -595,7 +575,7 @@ func TestLPopWithCountVerifiesRemaining_Stage09(t *testing.T) {
 }
 
 func TestLPopCountExceedsLength_Stage09(t *testing.T) {
-	requireListStage(t, 9)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -611,7 +591,7 @@ func TestLPopCountExceedsLength_Stage09(t *testing.T) {
 }
 
 func TestLPopCountAll_Stage09(t *testing.T) {
-	requireListStage(t, 9)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -636,7 +616,7 @@ func TestLPopCountAll_Stage09(t *testing.T) {
 // --- Stage 10: BLPOP with timeout 0 (blocks indefinitely) ---
 
 func TestBLPopBlocksAndReceivesElement_Stage10(t *testing.T) {
-	requireListStage(t, 10)
+	requireListStage(t)
 	sp := startTinyRed(t)
 
 	// Client 1: sends BLPOP and blocks
@@ -671,7 +651,7 @@ func TestBLPopBlocksAndReceivesElement_Stage10(t *testing.T) {
 }
 
 func TestBLPopServesLongestWaitingClient_Stage10(t *testing.T) {
-	requireListStage(t, 10)
+	requireListStage(t)
 	sp := startTinyRed(t)
 
 	// Client 1 blocks first
@@ -704,7 +684,7 @@ func TestBLPopServesLongestWaitingClient_Stage10(t *testing.T) {
 }
 
 func TestBLPopExistingListReturnsImmediately_Stage10(t *testing.T) {
-	requireListStage(t, 10)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -730,7 +710,7 @@ func TestBLPopExistingListReturnsImmediately_Stage10(t *testing.T) {
 // --- Stage 11: BLPOP with non-zero timeout ---
 
 func TestBLPopTimeoutExpires_Stage11(t *testing.T) {
-	requireListStage(t, 11)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -754,7 +734,7 @@ func TestBLPopTimeoutExpires_Stage11(t *testing.T) {
 }
 
 func TestBLPopTimeoutElementArrivesBeforeDeadline_Stage11(t *testing.T) {
-	requireListStage(t, 11)
+	requireListStage(t)
 	sp := startTinyRed(t)
 
 	// Client 1: blocks with a 2-second timeout
@@ -782,7 +762,7 @@ func TestBLPopTimeoutElementArrivesBeforeDeadline_Stage11(t *testing.T) {
 }
 
 func TestBLPopShortTimeout_Stage11(t *testing.T) {
-	requireListStage(t, 11)
+	requireListStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 

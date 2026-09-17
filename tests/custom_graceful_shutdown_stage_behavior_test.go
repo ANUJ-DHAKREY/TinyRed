@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,28 +15,9 @@ import (
 // this repo (no signal handling, no Dockerfile, no Makefile) — keeping this
 // at 0 by default means `go test ./...` stays green until each stage is
 // opted into explicitly via TINYRED_CUSTOM_GRACEFUL_SHUTDOWN_STAGE.
-const defaultMaxCustomGracefulShutdownStage = 0
-
-func maxCustomGracefulShutdownStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_GRACEFUL_SHUTDOWN_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomGracefulShutdownStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomGracefulShutdownStage
-	}
-	if v > 3 {
-		return 3
-	}
-	return v
-}
-
-func requireCustomGracefulShutdownStage(t *testing.T, stage int) {
+func requireCustomGracefulShutdownStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomGracefulShutdownStage() {
-		t.Skipf("skipping custom graceful-shutdown stage %d test; set TINYRED_CUSTOM_GRACEFUL_SHUTDOWN_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomGracefulShutdown)
 }
 
 // customGracefulShutdownWaitResult carries the outcome of a single Wait()
@@ -71,7 +51,7 @@ func customGracefulShutdownWaitForExit(cmd *exec.Cmd, timeout time.Duration) (*o
 }
 
 func TestServerExitsCleanlyOnSigterm_Stage01GracefulShutdown(t *testing.T) {
-	requireCustomGracefulShutdownStage(t, 1)
+	requireCustomGracefulShutdownStage(t)
 	// Scenario: server is started, a client connects and stays idle (never
 	// closed by the test), then the server process receives SIGTERM. The
 	// process must exit within a bounded time with status code 0.
@@ -98,7 +78,7 @@ func TestServerExitsCleanlyOnSigterm_Stage01GracefulShutdown(t *testing.T) {
 }
 
 func TestInFlightSetCommandCompletesBeforeConnectionClosesOnSigterm_Stage01GracefulShutdownInFlight(t *testing.T) {
-	requireCustomGracefulShutdownStage(t, 1)
+	requireCustomGracefulShutdownStage(t)
 	// Scenario: a SET command is written to the wire and SIGTERM is sent
 	// immediately afterward, racing shutdown against the in-flight command.
 	// The server must let the in-flight command finish and send the full
@@ -130,7 +110,7 @@ func TestInFlightSetCommandCompletesBeforeConnectionClosesOnSigterm_Stage01Grace
 }
 
 func TestDockerfileExistsWithMultiStageBuildAndExposedPort_Stage02Dockerfile(t *testing.T) {
-	requireCustomGracefulShutdownStage(t, 2)
+	requireCustomGracefulShutdownStage(t)
 	// Scenario: a lightweight presence/lint check (not a real `docker build`)
 	// verifying the repo-root Dockerfile is multi-stage and exposes 6379.
 	data, err := os.ReadFile("Dockerfile")
@@ -155,7 +135,7 @@ func TestDockerfileExistsWithMultiStageBuildAndExposedPort_Stage02Dockerfile(t *
 }
 
 func TestMakefileExistsWithBuildRunTestTargets_Stage03Makefile(t *testing.T) {
-	requireCustomGracefulShutdownStage(t, 3)
+	requireCustomGracefulShutdownStage(t)
 	// Scenario: a lightweight presence/lint check (not an actual `make`
 	// invocation) verifying the repo-root Makefile defines build/run/test
 	// targets.

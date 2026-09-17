@@ -1,9 +1,7 @@
 package tests
 
 import (
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -17,28 +15,9 @@ import (
 // Stage 4 — KEYS with glob patterns
 // Stage 5 — RENAME
 
-const defaultMaxCustomKeymgmtStage = 0
-
-func maxCustomKeymgmtStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_KEYMGMT_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomKeymgmtStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomKeymgmtStage
-	}
-	if v > 5 {
-		return 5
-	}
-	return v
-}
-
-func requireCustomKeymgmtStage(t *testing.T, stage int) {
+func requireCustomKeymgmtStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomKeymgmtStage() {
-		t.Skipf("skipping custom keymgmt stage %d test; set TINYRED_CUSTOM_KEYMGMT_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomKeyManagement)
 }
 
 // customKeymgmtSortedStrings returns a sorted copy of the given slice.
@@ -51,7 +30,7 @@ func customKeymgmtSortedStrings(in []string) []string {
 // --- Stage 1: DEL ---
 
 func TestDelRemovesExistingKeyAndSkipsMissing_Stage01Del(t *testing.T) {
-	requireCustomKeymgmtStage(t, 1)
+	requireCustomKeymgmtStage(t)
 	// Scenario: SET foo bar; DEL foo missing_key deletes only foo and returns
 	// the count of keys that actually existed (1); GET foo then confirms deletion.
 	sp := startTinyRed(t)
@@ -74,7 +53,7 @@ func TestDelRemovesExistingKeyAndSkipsMissing_Stage01Del(t *testing.T) {
 }
 
 func TestDelWithNoExistingKeysReturnsZero_Stage01Del(t *testing.T) {
-	requireCustomKeymgmtStage(t, 1)
+	requireCustomKeymgmtStage(t)
 	// Scenario: DEL on keys that never existed returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -88,7 +67,7 @@ func TestDelWithNoExistingKeysReturnsZero_Stage01Del(t *testing.T) {
 // --- Stage 2: EXISTS ---
 
 func TestExistsCountsRepeatedKeyMultipleTimes_Stage02Exists(t *testing.T) {
-	requireCustomKeymgmtStage(t, 2)
+	requireCustomKeymgmtStage(t)
 	// Scenario: SET foo bar; EXISTS foo foo missing_key counts foo twice
 	// (once per occurrence) since it exists both times it's checked, while
 	// missing_key contributes nothing.
@@ -107,7 +86,7 @@ func TestExistsCountsRepeatedKeyMultipleTimes_Stage02Exists(t *testing.T) {
 }
 
 func TestExistsWithOnlyMissingKeysReturnsZero_Stage02Exists(t *testing.T) {
-	requireCustomKeymgmtStage(t, 2)
+	requireCustomKeymgmtStage(t)
 	// Scenario: EXISTS on a key that was never set returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -121,7 +100,7 @@ func TestExistsWithOnlyMissingKeysReturnsZero_Stage02Exists(t *testing.T) {
 // --- Stage 3: TYPE across all data types ---
 
 func TestTypeReportsListForListKey_Stage03Type(t *testing.T) {
-	requireCustomKeymgmtStage(t, 3)
+	requireCustomKeymgmtStage(t)
 	// Scenario: RPUSH mylist a; TYPE mylist should report "list" as a RESP
 	// simple string.
 	sp := startTinyRed(t)
@@ -137,7 +116,7 @@ func TestTypeReportsListForListKey_Stage03Type(t *testing.T) {
 }
 
 func TestTypeReportsSetForSetKey_Stage03Type(t *testing.T) {
-	requireCustomKeymgmtStage(t, 3)
+	requireCustomKeymgmtStage(t)
 	// Scenario: SADD myset a; TYPE myset should report "set" as a RESP simple
 	// string. Depends on the custom Sets phase; gated at this same stage for
 	// consistency of phase numbering.
@@ -154,7 +133,7 @@ func TestTypeReportsSetForSetKey_Stage03Type(t *testing.T) {
 }
 
 func TestTypeReportsHashForHashKey_Stage03Type(t *testing.T) {
-	requireCustomKeymgmtStage(t, 3)
+	requireCustomKeymgmtStage(t)
 	// Scenario: HSET myhash f v; TYPE myhash should report "hash" as a RESP
 	// simple string. Depends on the custom Hashes phase; gated at this same
 	// stage for consistency of phase numbering.
@@ -171,7 +150,7 @@ func TestTypeReportsHashForHashKey_Stage03Type(t *testing.T) {
 }
 
 func TestTypeReportsZsetForSortedSetKey_Stage03Type(t *testing.T) {
-	requireCustomKeymgmtStage(t, 3)
+	requireCustomKeymgmtStage(t)
 	// Scenario: ZADD myzset 1 a; TYPE myzset should report "zset" as a RESP
 	// simple string. Depends on the CodeCrafters Sorted Sets phase; gated at
 	// this same stage for consistency of phase numbering.
@@ -190,7 +169,7 @@ func TestTypeReportsZsetForSortedSetKey_Stage03Type(t *testing.T) {
 // --- Stage 4: KEYS with glob patterns ---
 
 func TestKeysGlobPatternMatchesSubstring_Stage04KeysGlob(t *testing.T) {
-	requireCustomKeymgmtStage(t, 4)
+	requireCustomKeymgmtStage(t)
 	// Scenario: three keys are set; KEYS "*name*" should match only the two
 	// keys containing "name", regardless of order.
 	sp := startTinyRed(t)
@@ -218,7 +197,7 @@ func TestKeysGlobPatternMatchesSubstring_Stage04KeysGlob(t *testing.T) {
 }
 
 func TestKeysGlobPatternMatchesSingleCharWildcards_Stage04KeysGlob(t *testing.T) {
-	requireCustomKeymgmtStage(t, 4)
+	requireCustomKeymgmtStage(t)
 	// Scenario: KEYS "a??" should match only "age" (3-char key starting with
 	// "a") among the three keys set.
 	sp := startTinyRed(t)
@@ -240,7 +219,7 @@ func TestKeysGlobPatternMatchesSingleCharWildcards_Stage04KeysGlob(t *testing.T)
 }
 
 func TestKeysWildcardStillMatchesAllKeys_Stage04KeysGlob(t *testing.T) {
-	requireCustomKeymgmtStage(t, 4)
+	requireCustomKeymgmtStage(t)
 	// Scenario: regression check that the bare "*" pattern still returns all
 	// keys once glob support is added.
 	sp := startTinyRed(t)
@@ -264,7 +243,7 @@ func TestKeysWildcardStillMatchesAllKeys_Stage04KeysGlob(t *testing.T) {
 // --- Stage 5: RENAME ---
 
 func TestRenameMovesValueToNewKey_Stage05Rename(t *testing.T) {
-	requireCustomKeymgmtStage(t, 5)
+	requireCustomKeymgmtStage(t)
 	// Scenario: SET foo bar; RENAME foo baz returns +OK, GET baz returns the
 	// value, and GET foo confirms the old key no longer exists.
 	sp := startTinyRed(t)
@@ -292,7 +271,7 @@ func TestRenameMovesValueToNewKey_Stage05Rename(t *testing.T) {
 }
 
 func TestRenameMissingKeyReturnsError_Stage05Rename(t *testing.T) {
-	requireCustomKeymgmtStage(t, 5)
+	requireCustomKeymgmtStage(t)
 	// Scenario: RENAME on a key that doesn't exist returns a RESP error
 	// whose text mentions "no such key".
 	sp := startTinyRed(t)

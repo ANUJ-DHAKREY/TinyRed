@@ -2,7 +2,6 @@ package tests
 
 import (
 	"bufio"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,28 +11,9 @@ import (
 // optimistic-locking stages are implemented on the server yet. Every test in
 // this file skips by default until a developer bumps TINYRED_OPTIMISTIC_LOCKING_STAGE
 // as each stage gets implemented.
-const defaultMaxOptimisticLockingStage = 0
-
-func maxOptimisticLockingStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_OPTIMISTIC_LOCKING_STAGE"))
-	if raw == "" {
-		return defaultMaxOptimisticLockingStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxOptimisticLockingStage
-	}
-	if v > 8 {
-		return 8
-	}
-	return v
-}
-
-func requireOptimisticLockingStage(t *testing.T, stage int) {
+func requireOptimisticLockingStage(t *testing.T) {
 	t.Helper()
-	if stage > maxOptimisticLockingStage() {
-		t.Skipf("skipping optimistic locking stage %d test; set TINYRED_OPTIMISTIC_LOCKING_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseOptimisticLocking)
 }
 
 // readOptimisticExecResult reads the response to an EXEC command, which is
@@ -88,7 +68,7 @@ func readOptimisticExecResult(t *testing.T, r *bufio.Reader) (elements []string,
 // Scenario: WATCH on a single key, outside of any transaction, simply
 // acknowledges with +OK\r\n and must not error or crash the server.
 func TestWatchReturnsOK_Stage01WatchCommand(t *testing.T) {
-	requireOptimisticLockingStage(t, 1)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -103,7 +83,7 @@ func TestWatchReturnsOK_Stage01WatchCommand(t *testing.T) {
 // Scenario: once a connection has entered MULTI, calling WATCH must be
 // rejected with a RESP error mentioning WATCH, MULTI, and "not allowed".
 func TestWatchInsideMultiReturnsError_Stage02WatchInsideMulti(t *testing.T) {
-	requireOptimisticLockingStage(t, 2)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -135,7 +115,7 @@ func TestWatchInsideMultiReturnsError_Stage02WatchInsideMulti(t *testing.T) {
 // modifies the watched key foo from a separate connection before EXEC runs.
 // EXEC must abort (null array) and the queued write to bar must never apply.
 func TestStage03aExecAbortsOnWatchedKeyModified(t *testing.T) {
-	requireOptimisticLockingStage(t, 3)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)
@@ -183,7 +163,7 @@ func TestStage03aExecAbortsOnWatchedKeyModified(t *testing.T) {
 // modifies a different, unwatched key (caz) before EXEC runs. EXEC must
 // succeed (non-null array) and the queued write must take effect.
 func TestStage03bExecSucceedsWhenUnwatchedKeyModified(t *testing.T) {
-	requireOptimisticLockingStage(t, 3)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn3, r3 := dialClient(t, sp)
 	conn4, r4 := dialClient(t, sp)
@@ -235,7 +215,7 @@ func TestStage03bExecSucceedsWhenUnwatchedKeyModified(t *testing.T) {
 // Scenario: WATCH accepts multiple keys in one call. If any one of them is
 // modified by another client before EXEC, the transaction aborts.
 func TestExecAbortsWhenAnyWatchedKeyModified_Stage04WatchMultipleKeys(t *testing.T) {
-	requireOptimisticLockingStage(t, 4)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)
@@ -285,7 +265,7 @@ func TestExecAbortsWhenAnyWatchedKeyModified_Stage04WatchMultipleKeys(t *testing
 // another client creates that key before EXEC, that counts as a
 // modification and the transaction must abort.
 func TestExecAbortsWhenWatchedMissingKeyIsCreated_Stage05WatchMissingKey(t *testing.T) {
-	requireOptimisticLockingStage(t, 5)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)
@@ -328,7 +308,7 @@ func TestExecAbortsWhenWatchedMissingKeyIsCreated_Stage05WatchMissingKey(t *test
 // subsequent transaction is unaffected by earlier modifications to those
 // keys.
 func TestUnwatchClearsWatchState_Stage06UnwatchCommand(t *testing.T) {
-	requireOptimisticLockingStage(t, 6)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)
@@ -386,7 +366,7 @@ func TestUnwatchClearsWatchState_Stage06UnwatchCommand(t *testing.T) {
 // watch state must be cleared. A second transaction issued right after,
 // without a new WATCH, must not be affected by earlier modifications.
 func TestWatchStateClearedAfterExec_Stage07UnwatchOnExec(t *testing.T) {
-	requireOptimisticLockingStage(t, 7)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)
@@ -455,7 +435,7 @@ func TestWatchStateClearedAfterExec_Stage07UnwatchOnExec(t *testing.T) {
 // connection's watch state. A subsequent transaction must not be affected by
 // modifications that happened before the DISCARD.
 func TestDiscardClearsWatchState_Stage08UnwatchOnDiscard(t *testing.T) {
-	requireOptimisticLockingStage(t, 8)
+	requireOptimisticLockingStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 	conn2, r2 := dialClient(t, sp)

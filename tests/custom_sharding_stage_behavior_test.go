@@ -25,35 +25,13 @@ package tests
 
 import (
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 )
 
-const defaultMaxCustomShardingStage = 0
-
-func maxCustomShardingStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_SHARDING_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomShardingStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomShardingStage
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
-}
-
-func requireCustomShardingStage(t *testing.T, stage int) {
+func requireCustomShardingStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomShardingStage() {
-		t.Skipf("skipping custom sharding stage %d test; set TINYRED_CUSTOM_SHARDING_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomSharding)
 }
 
 // TestConcurrentSetGetAcrossManyKeysHasNoLostWrites_Stage01ShardedStore
@@ -66,7 +44,7 @@ func requireCustomShardingStage(t *testing.T, stage int) {
 // torn write, which is exactly what a buggy shard-routing/locking scheme
 // would produce under -race.
 func TestConcurrentSetGetAcrossManyKeysHasNoLostWrites_Stage01ShardedStore(t *testing.T) {
-	requireCustomShardingStage(t, 1)
+	requireCustomShardingStage(t)
 	// Scenario: 50 goroutines each on their own connection perform 20
 	// SET-then-GET round trips against keys they exclusively own, stressing
 	// the store's internal locking across up to 1000 distinct keys without
@@ -121,7 +99,7 @@ func TestConcurrentSetGetAcrossManyKeysHasNoLostWrites_Stage01ShardedStore(t *te
 // torn/mixed value from two concurrent writers racing on the same shard
 // lock.
 func TestConcurrentWritesToSharedKeysSurviveWithoutCorruption_Stage01ShardedStore(t *testing.T) {
-	requireCustomShardingStage(t, 1)
+	requireCustomShardingStage(t)
 	// Scenario: many goroutines write overlapping keys from a small shared
 	// pool; after all writes finish, every key's final value must be one of
 	// the values actually written to it (no torn/corrupted values).

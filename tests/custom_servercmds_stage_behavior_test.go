@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -9,34 +8,15 @@ import (
 	"time"
 )
 
-const defaultMaxCustomServerCmdsStage = 0
-
-func maxCustomServerCmdsStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_SERVERCMDS_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomServerCmdsStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomServerCmdsStage
-	}
-	if v > 4 {
-		return 4
-	}
-	return v
-}
-
-func requireCustomServerCmdsStage(t *testing.T, stage int) {
+func requireCustomServerCmdsStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomServerCmdsStage() {
-		t.Skipf("skipping custom servercmds stage %d test; set TINYRED_CUSTOM_SERVERCMDS_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomServerCommands)
 }
 
 // --- Stage 1: DBSIZE ---
 
 func TestDbsizeCountsKeysExcludingExpired_Stage01Dbsize(t *testing.T) {
-	requireCustomServerCmdsStage(t, 1)
+	requireCustomServerCmdsStage(t)
 	// Scenario: DBSIZE counts live keys and must not count an expired-but-not-yet-swept key.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -72,7 +52,7 @@ func TestDbsizeCountsKeysExcludingExpired_Stage01Dbsize(t *testing.T) {
 // --- Stage 2: FLUSHDB ---
 
 func TestFlushdbRemovesAllKeys_Stage02Flushdb(t *testing.T) {
-	requireCustomServerCmdsStage(t, 2)
+	requireCustomServerCmdsStage(t)
 	// Scenario: FLUSHDB clears all keys, resetting DBSIZE to 0 and making prior keys unreadable.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -111,7 +91,7 @@ var (
 )
 
 func TestInfoServerReportsPortClientsAndUptime_Stage03InfoServer(t *testing.T) {
-	requireCustomServerCmdsStage(t, 3)
+	requireCustomServerCmdsStage(t)
 	// Scenario: INFO server reports the exact listening port, a connected-clients count
 	// that reflects concurrently open connections, and a parseable uptime.
 	sp := startTinyRed(t)
@@ -174,7 +154,7 @@ func customServerCmdsBulkPayload(t *testing.T, raw string) string {
 // --- Stage 4: CONFIG GET for arbitrary keys ---
 
 func TestConfigGetKnownPortReturnsActualPort_Stage04ConfigGetPort(t *testing.T) {
-	requireCustomServerCmdsStage(t, 4)
+	requireCustomServerCmdsStage(t)
 	// Scenario: CONFIG GET port returns a two-element array with the exact listening port.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -193,7 +173,7 @@ func TestConfigGetKnownPortReturnsActualPort_Stage04ConfigGetPort(t *testing.T) 
 }
 
 func TestConfigGetUnknownKeyReturnsEmptyArrayNotError_Stage04ConfigGetUnknown(t *testing.T) {
-	requireCustomServerCmdsStage(t, 4)
+	requireCustomServerCmdsStage(t)
 	// Scenario: CONFIG GET for a key the server doesn't recognize returns an empty
 	// RESP array, never a RESP error.
 	sp := startTinyRed(t)

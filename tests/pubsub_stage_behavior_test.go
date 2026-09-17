@@ -5,35 +5,15 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-const defaultMaxPubSubStage = 0
-
-func maxPubSubStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_PUBSUB_STAGE"))
-	if raw == "" {
-		return defaultMaxPubSubStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxPubSubStage
-	}
-	if v > 7 {
-		return 7
-	}
-	return v
-}
-
-func requirePubSubStage(t *testing.T, stage int) {
+func requirePubSubStage(t *testing.T) {
 	t.Helper()
-	if stage > maxPubSubStage() {
-		t.Skipf("skipping pub/sub stage %d test; set TINYRED_PUBSUB_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phasePubSub)
 }
 
 // readPubSubArrayHeader reads a RESP array header line (e.g. "*3\r\n") and returns
@@ -97,7 +77,7 @@ func readRawBytes(t *testing.T, r *bufio.Reader, n int) string {
 // --- Stage 1: Subscribe to a Channel ---
 
 func TestSubscribeToChannelReturnsConfirmation_Stage01Subscribe(t *testing.T) {
-	requirePubSubStage(t, 1)
+	requirePubSubStage(t)
 	// Scenario: client sends SUBSCRIBE for a single channel and receives an exact
 	// three-element subscribe confirmation array: ["subscribe", "foo", 1].
 	sp := startTinyRed(t)
@@ -114,7 +94,7 @@ func TestSubscribeToChannelReturnsConfirmation_Stage01Subscribe(t *testing.T) {
 // --- Stage 2: Subscribe to Multiple Channels ---
 
 func TestSubscribeToMultipleChannelsIncrementsCount_Stage02MultipleChannels(t *testing.T) {
-	requirePubSubStage(t, 2)
+	requirePubSubStage(t)
 	// Scenario: subscribing to multiple channels on one connection increments the
 	// per-client channel count; re-subscribing to an already-subscribed channel
 	// does not increase the count further.
@@ -138,7 +118,7 @@ func TestSubscribeToMultipleChannelsIncrementsCount_Stage02MultipleChannels(t *t
 }
 
 func TestSubscribeCountIsPerClientNotGlobal_Stage02MultipleChannels(t *testing.T) {
-	requirePubSubStage(t, 2)
+	requirePubSubStage(t)
 	// Scenario: a second, independent connection subscribing to "foo" must get its
 	// own count of 1, rather than continuing some shared/global counter.
 	sp := startTinyRed(t)
@@ -163,7 +143,7 @@ func TestSubscribeCountIsPerClientNotGlobal_Stage02MultipleChannels(t *testing.T
 // --- Stage 3: Enter Subscribed Mode ---
 
 func TestDisallowedCommandInSubscribedModeReturnsError_Stage03SubscribedMode(t *testing.T) {
-	requirePubSubStage(t, 3)
+	requirePubSubStage(t)
 	// Scenario: once a connection has entered subscribed mode via SUBSCRIBE,
 	// sending a disallowed command such as ECHO must be rejected with a RESP
 	// error naming the offending command and stating it isn't allowed.
@@ -190,7 +170,7 @@ func TestDisallowedCommandInSubscribedModeReturnsError_Stage03SubscribedMode(t *
 // --- Stage 4: PING in Subscribed Mode ---
 
 func TestPingInSubscribedModeReturnsArrayResponse_Stage04PingSubscribed(t *testing.T) {
-	requirePubSubStage(t, 4)
+	requirePubSubStage(t)
 	// Scenario: PING sent on a connection that is in subscribed mode must return
 	// a two-element RESP array ["pong", ""] instead of the plain simple string.
 	sp := startTinyRed(t)
@@ -208,7 +188,7 @@ func TestPingInSubscribedModeReturnsArrayResponse_Stage04PingSubscribed(t *testi
 }
 
 func TestPingOnFreshConnectionStillReturnsSimplePong_Stage04PingSubscribed(t *testing.T) {
-	requirePubSubStage(t, 4)
+	requirePubSubStage(t)
 	// Scenario: regression check -- a connection that has never subscribed must
 	// still receive the plain +PONG simple string reply for PING.
 	sp := startTinyRed(t)
@@ -223,7 +203,7 @@ func TestPingOnFreshConnectionStillReturnsSimplePong_Stage04PingSubscribed(t *te
 // --- Stage 5: Publish a Message ---
 
 func TestPublishReturnsSubscriberCount_Stage05Publish(t *testing.T) {
-	requirePubSubStage(t, 5)
+	requirePubSubStage(t)
 	// Scenario: PUBLISH returns an integer equal to the number of clients
 	// currently subscribed to the target channel.
 	sp := startTinyRed(t)
@@ -245,7 +225,7 @@ func TestPublishReturnsSubscriberCount_Stage05Publish(t *testing.T) {
 }
 
 func TestPublishToChannelWithNoSubscribersReturnsZero_Stage05Publish(t *testing.T) {
-	requirePubSubStage(t, 5)
+	requirePubSubStage(t)
 	// Scenario: publishing to a channel with no subscribers returns zero.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -260,7 +240,7 @@ func TestPublishToChannelWithNoSubscribersReturnsZero_Stage05Publish(t *testing.
 // --- Stage 6: Deliver Messages ---
 
 func TestPublishDeliversMessageToSubscriber_Stage06DeliverMessages(t *testing.T) {
-	requirePubSubStage(t, 6)
+	requirePubSubStage(t)
 	// Scenario: a published message is pushed, unsolicited, only to connections
 	// subscribed to that exact channel; a connection subscribed to a different
 	// channel must receive nothing for that publish.
@@ -302,7 +282,7 @@ func TestPublishDeliversMessageToSubscriber_Stage06DeliverMessages(t *testing.T)
 // --- Stage 7: Unsubscribe ---
 
 func TestUnsubscribeRemovesChannelSubscription_Stage07Unsubscribe(t *testing.T) {
-	requirePubSubStage(t, 7)
+	requirePubSubStage(t)
 	// Scenario: UNSUBSCRIBE removes a channel from a client's subscriptions.
 	// PUBLISH afterward must reflect the reduced subscriber count for the
 	// unsubscribed channel, and the unsubscribing client must no longer receive

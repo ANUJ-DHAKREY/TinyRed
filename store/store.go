@@ -5,14 +5,30 @@ import (
 	"slices"
 	"sync"
 	"time"
-	"tinyred/resp"
 )
 
 type Store struct {
-	data        map[string]*resp.Entry
+	data        map[string]*Entry
 	mu          sync.RWMutex
 	waiterStore WaiterStore
 }
+
+type Entry struct {
+	Type     string
+	Value    any // holds string, []string, map[string]string, etc.
+	ExpireAt time.Time
+}
+
+type ZSet struct {
+	HashMap   map[string]float32
+	ZSkipList *SkipList
+}
+
+const (
+	EntryTypeString    string = "string"
+	EntryTypeList      string = "list"
+	EntryTypeSortedSet string = "sortedset"
+)
 
 type WaiterStore map[string][]BLPopWaiter
 
@@ -42,7 +58,7 @@ const (
 
 func New() *Store {
 	return &Store{
-		data:        map[string]*resp.Entry{},
+		data:        map[string]*Entry{},
 		waiterStore: WaiterStore{},
 	}
 }
@@ -127,27 +143,27 @@ func (s *Store) BLPOP(key string, timeout float64) (BLPopdata, error) {
 	s.mu.Unlock()
 	return result, nil
 }
-func (s *Store) Get(key string) (*resp.Entry, bool) {
+func (s *Store) Get(key string) (*Entry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	value, ok := s.data[key]
 	return value, ok
 }
 
-func (s *Store) Set(key string, entry *resp.Entry) {
+func (s *Store) Set(key string, entry *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = entry
 }
 
-func (s *Store) Update(key string, fn func(*resp.Entry) (*resp.Entry, error)) (*resp.Entry, error) {
+func (s *Store) Update(key string, fn func(*Entry) (*Entry, error)) (*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := s.data[key]
 	newEntry, err := fn(entry)
 
 	if err != nil {
-		return &resp.Entry{}, err
+		return &Entry{}, err
 	}
 	if newEntry != nil {
 		s.data[key] = newEntry
@@ -161,7 +177,7 @@ func (s *Store) SendToWaiters(responseQueue []TempPushWaiterQueue) {
 		res.channel <- res.data
 	}
 }
-func (s *Store) ListPush(key string, values []string, direction bool) (*resp.Entry, error) {
+func (s *Store) ListPush(key string, values []string, direction bool) (*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	waiters, ok := s.waiterStore[key]
@@ -187,14 +203,14 @@ func (s *Store) ListPush(key string, values []string, direction bool) (*resp.Ent
 		}
 
 		if len(values) == 0 {
-			return &resp.Entry{Type: resp.EntryTypeList, Value: []string{}}, nil
+			return &Entry{Type: EntryTypeList, Value: []string{}}, nil
 		}
 	}
 
 	list, ok := s.data[key]
 	if !ok {
-		entry := &resp.Entry{
-			Type:  resp.EntryTypeList,
+		entry := &Entry{
+			Type:  EntryTypeList,
 			Value: values,
 		}
 		s.data[key] = entry

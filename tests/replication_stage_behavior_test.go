@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,28 +16,9 @@ import (
 // command, no REPLCONF/PSYNC/WAIT), so every test below is gated behind
 // TINYRED_REPLICATION_STAGE and skips by default until the corresponding
 // server-side feature lands.
-const defaultMaxReplicationStage = 0
-
-func maxReplicationStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_REPLICATION_STAGE"))
-	if raw == "" {
-		return defaultMaxReplicationStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxReplicationStage
-	}
-	if v > 18 {
-		return 18
-	}
-	return v
-}
-
-func requireReplicationStage(t *testing.T, stage int) {
+func requireReplicationStage(t *testing.T) {
 	t.Helper()
-	if stage > maxReplicationStage() {
-		t.Skipf("skipping replication stage %d test; set TINYRED_REPLICATION_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseReplication)
 }
 
 // --- Local RESP / replication helpers ---
@@ -205,7 +185,7 @@ var replIDPattern = regexp.MustCompile(`master_replid:([A-Za-z0-9]{40})`)
 // --- Stage 1 (doc 53): Configure listening port ---
 
 func TestServerAcceptsConnectionOnConfiguredPort_Stage01ListeningPort(t *testing.T) {
-	requireReplicationStage(t, 1)
+	requireReplicationStage(t)
 	// Scenario: server started via startTinyRedWithArgs binds to a custom,
 	// dynamically-chosen port and accepts a plain TCP connection on it.
 	sp := startTinyRedWithArgs(t)
@@ -220,7 +200,7 @@ func TestServerAcceptsConnectionOnConfiguredPort_Stage01ListeningPort(t *testing
 // --- Stage 2 (doc 54): The INFO command (master role) ---
 
 func TestInfoReplicationReportsMasterRole_Stage02InfoMaster(t *testing.T) {
-	requireReplicationStage(t, 2)
+	requireReplicationStage(t)
 	// Scenario: a plain server (no --replicaof) reports role:master via
 	// INFO replication.
 	sp := startTinyRedWithArgs(t)
@@ -237,7 +217,7 @@ func TestInfoReplicationReportsMasterRole_Stage02InfoMaster(t *testing.T) {
 // --- Stage 3 (doc 55): The INFO command on a replica ---
 
 func TestInfoReplicationReportsSlaveRoleWithReplicaOf_Stage03InfoReplica(t *testing.T) {
-	requireReplicationStage(t, 3)
+	requireReplicationStage(t)
 	// Scenario: a server started with --replicaof reports role:slave via
 	// INFO replication, without needing a real master to be listening.
 	sp := startTinyRedWithArgs(t, "--replicaof", "localhost 6379")
@@ -252,7 +232,7 @@ func TestInfoReplicationReportsSlaveRoleWithReplicaOf_Stage03InfoReplica(t *test
 }
 
 func TestInfoReplicationStillReportsMasterRoleWithoutReplicaOf_Stage03InfoReplicaRegression(t *testing.T) {
-	requireReplicationStage(t, 3)
+	requireReplicationStage(t)
 	// Scenario: regression check that a plain server (no --replicaof) still
 	// reports role:master once the replica-role handling is added.
 	sp := startTinyRedWithArgs(t)
@@ -269,7 +249,7 @@ func TestInfoReplicationStillReportsMasterRoleWithoutReplicaOf_Stage03InfoReplic
 // --- Stage 4 (doc 56): Initial replication ID and offset ---
 
 func TestInfoReplicationIncludesReplIdAndOffset_Stage04ReplIDOffset(t *testing.T) {
-	requireReplicationStage(t, 4)
+	requireReplicationStage(t)
 	// Scenario: a master's INFO replication output includes a 40-character
 	// alphanumeric master_replid and a master_repl_offset of 0.
 	sp := startTinyRedWithArgs(t)
@@ -290,7 +270,7 @@ func TestInfoReplicationIncludesReplIdAndOffset_Stage04ReplIDOffset(t *testing.T
 // --- Stage 5 (doc 57): Send handshake (1/3) ---
 
 func TestReplicaSendsPingFirstDuringHandshake_Stage05SendPing(t *testing.T) {
-	requireReplicationStage(t, 5)
+	requireReplicationStage(t)
 	// Scenario: a server started with --replicaof connects to the master
 	// and the very first bytes it sends encode a PING RESP array.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -312,7 +292,7 @@ func TestReplicaSendsPingFirstDuringHandshake_Stage05SendPing(t *testing.T) {
 // --- Stage 6 (doc 58): Send handshake (2/3) ---
 
 func TestReplicaSendsReplconfAfterPing_Stage06SendReplconf(t *testing.T) {
-	requireReplicationStage(t, 6)
+	requireReplicationStage(t)
 	// Scenario: after PING/PONG, the replica sends REPLCONF listening-port
 	// <its own port> and REPLCONF capa psync2, waiting for +OK after each.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -349,7 +329,7 @@ func TestReplicaSendsReplconfAfterPing_Stage06SendReplconf(t *testing.T) {
 // --- Stage 7 (doc 59): Send handshake (3/3) ---
 
 func TestReplicaSendsPsyncAfterReplconf_Stage07SendPsync(t *testing.T) {
-	requireReplicationStage(t, 7)
+	requireReplicationStage(t)
 	// Scenario: after both REPLCONF/OK exchanges, the replica sends
 	// PSYNC ? -1.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -382,7 +362,7 @@ func TestReplicaSendsPsyncAfterReplconf_Stage07SendPsync(t *testing.T) {
 // --- Stage 8 (doc 60): Receive handshake (1/2), master side ---
 
 func TestMasterRespondsOkToReplconfCommands_Stage08ReceiveReplconf(t *testing.T) {
-	requireReplicationStage(t, 8)
+	requireReplicationStage(t)
 	// Scenario: a plain server (acting as master) responds +OK to both
 	// REPLCONF commands sent by a connecting replica.
 	sp := startTinyRedWithArgs(t)
@@ -402,7 +382,7 @@ func TestMasterRespondsOkToReplconfCommands_Stage08ReceiveReplconf(t *testing.T)
 // --- Stage 9 (doc 61): Receive handshake (2/2) ---
 
 func TestMasterRespondsFullresyncToPsync_Stage09ReceivePsync(t *testing.T) {
-	requireReplicationStage(t, 9)
+	requireReplicationStage(t)
 	// Scenario: after the two REPLCONF exchanges, PSYNC ? -1 gets a
 	// +FULLRESYNC <40-char replid> 0 response.
 	sp := startTinyRedWithArgs(t)
@@ -425,7 +405,7 @@ func TestMasterRespondsFullresyncToPsync_Stage09ReceivePsync(t *testing.T) {
 // --- Stage 10 (doc 62): Empty RDB transfer ---
 
 func TestMasterSendsEmptyRDBAfterFullresync_Stage10EmptyRDBTransfer(t *testing.T) {
-	requireReplicationStage(t, 10)
+	requireReplicationStage(t)
 	// Scenario: after the FULLRESYNC line, the master sends an RDB file
 	// using "$<len>\r\n<bytes>" framing (no trailing CRLF).
 	sp := startTinyRedWithArgs(t)
@@ -449,7 +429,7 @@ func TestMasterSendsEmptyRDBAfterFullresync_Stage10EmptyRDBTransfer(t *testing.T
 // --- Stage 11 (doc 63): Single-replica propagation ---
 
 func TestMasterPropagatesWriteCommandToSingleReplica_Stage11SingleReplicaPropagation(t *testing.T) {
-	requireReplicationStage(t, 11)
+	requireReplicationStage(t)
 	// Scenario: once a replica finishes the handshake, a SET issued by a
 	// separate plain client is propagated to the replica connection.
 	sp := startTinyRedWithArgs(t)
@@ -478,7 +458,7 @@ func TestMasterPropagatesWriteCommandToSingleReplica_Stage11SingleReplicaPropaga
 // --- Stage 12 (doc 64): Multi-replica propagation ---
 
 func TestMasterPropagatesWriteCommandToMultipleReplicas_Stage12MultiReplicaPropagation(t *testing.T) {
-	requireReplicationStage(t, 12)
+	requireReplicationStage(t)
 	// Scenario: two independently-handshaken replicas both receive the same
 	// propagated command in order.
 	sp := startTinyRedWithArgs(t)
@@ -516,7 +496,7 @@ func TestMasterPropagatesWriteCommandToMultipleReplicas_Stage12MultiReplicaPropa
 // --- Stage 13 (doc 65): Command processing (replica side) ---
 
 func TestReplicaAppliesPropagatedCommands_Stage13CommandProcessing(t *testing.T) {
-	requireReplicationStage(t, 13)
+	requireReplicationStage(t)
 	// Scenario: a replica applies commands propagated over the replication
 	// connection (without replying to them), and later serves them via GET.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -560,7 +540,7 @@ func TestReplicaAppliesPropagatedCommands_Stage13CommandProcessing(t *testing.T)
 // --- Stage 14 (doc 66): ACKs with no commands ---
 
 func TestReplicaRespondsToGetAckWithZeroOffset_Stage14AckNoCommands(t *testing.T) {
-	requireReplicationStage(t, 14)
+	requireReplicationStage(t)
 	// Scenario: right after the handshake, REPLCONF GETACK * gets
 	// REPLCONF ACK 0 back on the same replication connection.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -591,7 +571,7 @@ func TestReplicaRespondsToGetAckWithZeroOffset_Stage14AckNoCommands(t *testing.T
 // --- Stage 15 (doc 67): ACKs with commands (offset tracking) ---
 
 func TestReplicaTracksOffsetAcrossGetAcks_Stage15AckWithCommands(t *testing.T) {
-	requireReplicationStage(t, 15)
+	requireReplicationStage(t)
 	// Scenario: the replica's REPLCONF ACK offset only counts bytes of
 	// commands processed strictly before the current GETACK request.
 	fakeMasterPort, connCh := startFakeMaster(t)
@@ -665,7 +645,7 @@ func TestReplicaTracksOffsetAcrossGetAcks_Stage15AckWithCommands(t *testing.T) {
 // --- Stage 16 (doc 68): WAIT with no replicas ---
 
 func TestWaitReturnsZeroImmediatelyWithNoReplicas_Stage16WaitNoReplicas(t *testing.T) {
-	requireReplicationStage(t, 16)
+	requireReplicationStage(t)
 	// Scenario: WAIT 0 <timeout> with zero connected replicas returns 0
 	// immediately, well before the timeout elapses.
 	sp := startTinyRedWithArgs(t)
@@ -687,7 +667,7 @@ func TestWaitReturnsZeroImmediatelyWithNoReplicas_Stage16WaitNoReplicas(t *testi
 // --- Stage 17 (doc 69): WAIT with no commands ---
 
 func TestWaitReturnsConnectedReplicaCountWithNoCommands_Stage17WaitNoCommands(t *testing.T) {
-	requireReplicationStage(t, 17)
+	requireReplicationStage(t)
 	// Scenario: with N replicas fully handshaken but no writes issued yet,
 	// WAIT returns the number of connected replicas regardless of the
 	// requested count.
@@ -710,7 +690,7 @@ func TestWaitReturnsConnectedReplicaCountWithNoCommands_Stage17WaitNoCommands(t 
 // --- Stage 18 (doc 70): WAIT with multiple commands ---
 
 func TestWaitReturnsAckCountAfterWriteCommands_Stage18WaitMultipleCommands(t *testing.T) {
-	requireReplicationStage(t, 18)
+	requireReplicationStage(t)
 	// Scenario: after write commands, WAIT triggers REPLCONF GETACK under
 	// the hood and returns a sane ack count bounded by the number of
 	// connected replicas (the exact value vs. the requested count is

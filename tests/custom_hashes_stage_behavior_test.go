@@ -9,34 +9,12 @@ package tests
 
 import (
 	"bufio"
-	"os"
-	"strconv"
-	"strings"
 	"testing"
 )
 
-const defaultMaxCustomHashesStage = 0
-
-func maxCustomHashesStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_HASHES_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomHashesStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomHashesStage
-	}
-	if v > 6 {
-		return 6
-	}
-	return v
-}
-
-func requireCustomHashesStage(t *testing.T, stage int) {
+func requireCustomHashesStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomHashesStage() {
-		t.Skipf("skipping custom hashes stage %d test; set TINYRED_CUSTOM_HASHES_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomHashes)
 }
 
 // customHashesReadFlatMap reads a RESP array of the form
@@ -59,7 +37,7 @@ func customHashesReadFlatMap(t *testing.T, r *bufio.Reader) map[string]string {
 // --- Stage 1: HSET ---
 
 func TestHSetNewFieldReturnsOne_Stage01HSet(t *testing.T) {
-	requireCustomHashesStage(t, 1)
+	requireCustomHashesStage(t)
 	// Scenario: HSET on a brand-new hash with a single new field returns 1.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -72,7 +50,7 @@ func TestHSetNewFieldReturnsOne_Stage01HSet(t *testing.T) {
 }
 
 func TestHSetUpdateExistingAndAddNewCountsOnlyNew_Stage01HSet(t *testing.T) {
-	requireCustomHashesStage(t, 1)
+	requireCustomHashesStage(t)
 	// Scenario: HSET updating an existing field and adding a new one counts
 	// only the newly added field.
 	sp := startTinyRed(t)
@@ -94,7 +72,7 @@ func TestHSetUpdateExistingAndAddNewCountsOnlyNew_Stage01HSet(t *testing.T) {
 // --- Stage 2: HGET ---
 
 func TestHGetReturnsStoredValue_Stage02HGet(t *testing.T) {
-	requireCustomHashesStage(t, 2)
+	requireCustomHashesStage(t)
 	// Scenario: HGET on an existing field returns its value as a bulk string.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -109,7 +87,7 @@ func TestHGetReturnsStoredValue_Stage02HGet(t *testing.T) {
 }
 
 func TestHGetMissingFieldReturnsNull_Stage02HGet(t *testing.T) {
-	requireCustomHashesStage(t, 2)
+	requireCustomHashesStage(t)
 	// Scenario: HGET on a missing field within an existing hash returns a
 	// null bulk string.
 	sp := startTinyRed(t)
@@ -125,7 +103,7 @@ func TestHGetMissingFieldReturnsNull_Stage02HGet(t *testing.T) {
 }
 
 func TestHGetMissingHashReturnsNull_Stage02HGet(t *testing.T) {
-	requireCustomHashesStage(t, 2)
+	requireCustomHashesStage(t)
 	// Scenario: HGET on a hash key that doesn't exist returns a null bulk
 	// string.
 	sp := startTinyRed(t)
@@ -140,7 +118,7 @@ func TestHGetMissingHashReturnsNull_Stage02HGet(t *testing.T) {
 // --- Stage 3: HGETALL ---
 
 func TestHGetAllReturnsAllFieldValuePairs_Stage03HGetAll(t *testing.T) {
-	requireCustomHashesStage(t, 3)
+	requireCustomHashesStage(t)
 	// Scenario: HGETALL returns a flat array of field/value pairs that, when
 	// paired up, reconstructs the full hash regardless of order.
 	sp := startTinyRed(t)
@@ -163,7 +141,7 @@ func TestHGetAllReturnsAllFieldValuePairs_Stage03HGetAll(t *testing.T) {
 }
 
 func TestHGetAllMissingHashReturnsEmptyArray_Stage03HGetAll(t *testing.T) {
-	requireCustomHashesStage(t, 3)
+	requireCustomHashesStage(t)
 	// Scenario: HGETALL on a missing key returns an empty array (*0\r\n).
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -178,7 +156,7 @@ func TestHGetAllMissingHashReturnsEmptyArray_Stage03HGetAll(t *testing.T) {
 // --- Stage 4: HEXISTS ---
 
 func TestHExistsExistingField_Stage04HExists(t *testing.T) {
-	requireCustomHashesStage(t, 4)
+	requireCustomHashesStage(t)
 	// Scenario: HEXISTS returns 1 when the field is present in the hash.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -194,7 +172,7 @@ func TestHExistsExistingField_Stage04HExists(t *testing.T) {
 }
 
 func TestHExistsMissingField_Stage04HExists(t *testing.T) {
-	requireCustomHashesStage(t, 4)
+	requireCustomHashesStage(t)
 	// Scenario: HEXISTS returns 0 when the field is absent from an existing
 	// hash.
 	sp := startTinyRed(t)
@@ -211,7 +189,7 @@ func TestHExistsMissingField_Stage04HExists(t *testing.T) {
 }
 
 func TestHExistsMissingHash_Stage04HExists(t *testing.T) {
-	requireCustomHashesStage(t, 4)
+	requireCustomHashesStage(t)
 	// Scenario: HEXISTS returns 0 when the hash key itself doesn't exist.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -226,7 +204,7 @@ func TestHExistsMissingHash_Stage04HExists(t *testing.T) {
 // --- Stage 5: HLEN ---
 
 func TestHLenExistingHash_Stage05HLen(t *testing.T) {
-	requireCustomHashesStage(t, 5)
+	requireCustomHashesStage(t)
 	// Scenario: HLEN returns the number of fields stored in the hash.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -242,7 +220,7 @@ func TestHLenExistingHash_Stage05HLen(t *testing.T) {
 }
 
 func TestHLenMissingHash_Stage05HLen(t *testing.T) {
-	requireCustomHashesStage(t, 5)
+	requireCustomHashesStage(t)
 	// Scenario: HLEN returns 0 for a hash key that doesn't exist.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -257,7 +235,7 @@ func TestHLenMissingHash_Stage05HLen(t *testing.T) {
 // --- Stage 6: HDEL ---
 
 func TestHDelRemovesOnlyExistingFields_Stage06HDel(t *testing.T) {
-	requireCustomHashesStage(t, 6)
+	requireCustomHashesStage(t)
 	// Scenario: HDEL removes the fields that exist and ignores missing ones,
 	// returning the count of fields actually removed.
 	sp := startTinyRed(t)
@@ -280,7 +258,7 @@ func TestHDelRemovesOnlyExistingFields_Stage06HDel(t *testing.T) {
 }
 
 func TestHDelMissingHashReturnsZero_Stage06HDel(t *testing.T) {
-	requireCustomHashesStage(t, 6)
+	requireCustomHashesStage(t)
 	// Scenario: HDEL on a hash key that doesn't exist returns 0.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -293,7 +271,7 @@ func TestHDelMissingHashReturnsZero_Stage06HDel(t *testing.T) {
 }
 
 func TestHDelAllFieldsRemovesKeyEntirely_Stage06HDel(t *testing.T) {
-	requireCustomHashesStage(t, 6)
+	requireCustomHashesStage(t)
 	// Scenario: per CUSTOM_STAGES.md notes, deleting all fields from a hash
 	// removes the key entirely, matching real Redis (like SREM does for sets).
 	sp := startTinyRed(t)

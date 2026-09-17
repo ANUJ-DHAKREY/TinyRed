@@ -2,7 +2,6 @@ package tests
 
 import (
 	"bufio"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,28 +11,9 @@ import (
 // stages (INCR, MULTI, EXEC, DISCARD) are implemented yet. Every test in this
 // file skips by default until a developer bumps TINYRED_TRANSACTION_STAGE as
 // they implement each stage.
-const defaultMaxTransactionStage = 0
-
-func maxTransactionStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_TRANSACTION_STAGE"))
-	if raw == "" {
-		return defaultMaxTransactionStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxTransactionStage
-	}
-	if v > 11 {
-		return 11
-	}
-	return v
-}
-
-func requireTransactionStage(t *testing.T, stage int) {
+func requireTransactionStage(t *testing.T) {
 	t.Helper()
-	if stage > maxTransactionStage() {
-		t.Skipf("skipping transaction stage %d test; set TINYRED_TRANSACTION_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseTransactions)
 }
 
 // readTxnExecArrayRaw reads a generic RESP array header ("*N\r\n" or
@@ -91,7 +71,7 @@ func readTxnExecArrayRaw(t *testing.T, r *bufio.Reader) ([]string, bool) {
 // Scenario: INCR on an existing integer-valued key increments it and returns
 // the new value as a RESP integer.
 func TestIncrExistingIntegerKey_Stage01IncrKeyExists(t *testing.T) {
-	requireTransactionStage(t, 1)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -112,7 +92,7 @@ func TestIncrExistingIntegerKey_Stage01IncrKeyExists(t *testing.T) {
 // Scenario: INCR on a missing key creates it with value 1, and a subsequent
 // GET reflects that value as a string.
 func TestIncrMissingKeyCreatesItAtOne_Stage02IncrKeyMissing(t *testing.T) {
-	requireTransactionStage(t, 2)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -134,7 +114,7 @@ func TestIncrMissingKeyCreatesItAtOne_Stage02IncrKeyMissing(t *testing.T) {
 // Scenario: INCR on a key whose value isn't an integer returns a RESP error
 // mentioning that the value is not an integer.
 func TestIncrNonIntegerValueReturnsError_Stage03IncrNotInteger(t *testing.T) {
-	requireTransactionStage(t, 3)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -157,7 +137,7 @@ func TestIncrNonIntegerValueReturnsError_Stage03IncrNotInteger(t *testing.T) {
 
 // Scenario: MULTI starts a transaction and replies with a simple +OK.
 func TestMultiStartsTransaction_Stage04Multi(t *testing.T) {
-	requireTransactionStage(t, 4)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -171,7 +151,7 @@ func TestMultiStartsTransaction_Stage04Multi(t *testing.T) {
 
 // Scenario: calling EXEC on a connection that never issued MULTI is an error.
 func TestExecWithoutMultiReturnsError_Stage05ExecWithoutMulti(t *testing.T) {
-	requireTransactionStage(t, 5)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -191,7 +171,7 @@ func TestExecWithoutMultiReturnsError_Stage05ExecWithoutMulti(t *testing.T) {
 // empty array, and the transaction is considered closed afterward, so a
 // second EXEC on the same connection errors out.
 func TestEmptyTransactionReturnsEmptyArray_Stage06EmptyTransaction(t *testing.T) {
-	requireTransactionStage(t, 6)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -225,7 +205,7 @@ func TestEmptyTransactionReturnsEmptyArray_Stage06EmptyTransaction(t *testing.T)
 // than executed immediately. A separate connection confirms the queued SET
 // has not taken effect yet.
 func TestQueuedCommandsDoNotTakeEffectUntilExec_Stage07QueueingCommands(t *testing.T) {
-	requireTransactionStage(t, 7)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn1, r1 := dialClient(t, sp)
 
@@ -257,7 +237,7 @@ func TestQueuedCommandsDoNotTakeEffectUntilExec_Stage07QueueingCommands(t *testi
 // Scenario: EXEC runs all queued commands in order and returns their results
 // as a single RESP array; effects are visible afterward on the connection.
 func TestExecRunsQueuedCommandsInOrder_Stage08ExecutingTransaction(t *testing.T) {
-	requireTransactionStage(t, 8)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -319,7 +299,7 @@ func TestExecRunsQueuedCommandsInOrder_Stage08ExecutingTransaction(t *testing.T)
 // Scenario: DISCARD abandons a queued transaction without executing any of
 // its commands, and calling DISCARD again with no active transaction errors.
 func TestDiscardAbandonsQueuedTransaction_Stage09Discard(t *testing.T) {
-	requireTransactionStage(t, 9)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -366,7 +346,7 @@ func TestDiscardAbandonsQueuedTransaction_Stage09Discard(t *testing.T) {
 // successful effects persist; the failure is reported as an error element in
 // the EXEC result array rather than aborting the whole transaction.
 func TestExecContinuesAfterCommandFailure_Stage10FailuresWithinTransaction(t *testing.T) {
-	requireTransactionStage(t, 10)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
 
@@ -427,7 +407,7 @@ func TestExecContinuesAfterCommandFailure_Stage10FailuresWithinTransaction(t *te
 // connection 1's EXEC completes, so it observes connection 1's committed
 // effect without racing on the shared key.
 func TestConcurrentTransactionsHaveIndependentQueues_Stage11MultipleConcurrentTransactions(t *testing.T) {
-	requireTransactionStage(t, 11)
+	requireTransactionStage(t)
 	sp := startTinyRed(t)
 
 	conn1, r1 := dialClient(t, sp)

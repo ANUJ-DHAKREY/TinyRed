@@ -18,28 +18,9 @@ import (
 	"time"
 )
 
-const defaultMaxRDBStage = 6
-
-func maxRDBStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_RDB_STAGE"))
-	if raw == "" {
-		return defaultMaxRDBStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxRDBStage
-	}
-	if v > 6 {
-		return 6
-	}
-	return v
-}
-
-func requireRDBStage(t *testing.T, stage int) {
+func requireRDBStage(t *testing.T) {
 	t.Helper()
-	if stage > maxRDBStage() {
-		t.Skipf("skipping RDB stage %d test; set TINYRED_RDB_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseRDB)
 }
 
 // startTinyRedWithRDB starts the server with --dir and --dbfilename flags.
@@ -266,7 +247,7 @@ func extractBulkValue(raw string) string {
 // ========== RDB Stage 1: CONFIG GET dir / dbfilename ==========
 
 func TestConfigGetReturnsDirAndDbfilename_RDBStage01(t *testing.T) {
-	requireRDBStage(t, 1)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -304,7 +285,7 @@ func TestConfigGetReturnsDirAndDbfilename_RDBStage01(t *testing.T) {
 // ========== RDB Stage 2: Read a single key from RDB ==========
 
 func TestReadSingleKeyFromRDB_RDBStage02(t *testing.T) {
-	requireRDBStage(t, 2)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -331,7 +312,7 @@ func TestReadSingleKeyFromRDB_RDBStage02(t *testing.T) {
 // ========== RDB Stage 3: Read string value from RDB ==========
 
 func TestReadStringValueFromRDB_RDBStage03(t *testing.T) {
-	requireRDBStage(t, 3)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -355,7 +336,7 @@ func TestReadStringValueFromRDB_RDBStage03(t *testing.T) {
 // ========== RDB Stage 4: Read multiple keys from RDB ==========
 
 func TestReadMultipleKeysFromRDB_RDBStage04(t *testing.T) {
-	requireRDBStage(t, 4)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -393,7 +374,7 @@ func TestReadMultipleKeysFromRDB_RDBStage04(t *testing.T) {
 // ========== RDB Stage 5: Read multiple string values from RDB ==========
 
 func TestReadMultipleStringValuesFromRDB_RDBStage05(t *testing.T) {
-	requireRDBStage(t, 5)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -430,7 +411,7 @@ func TestReadMultipleStringValuesFromRDB_RDBStage05(t *testing.T) {
 // ========== RDB Stage 6: Read values with expiry ==========
 
 func TestReadValuesWithExpiryFromRDB_RDBStage06(t *testing.T) {
-	requireRDBStage(t, 6)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -474,7 +455,7 @@ func TestReadValuesWithExpiryFromRDB_RDBStage06(t *testing.T) {
 // ========== Additional RDB Stage 1 Tests ==========
 
 func TestConfigGetDir_CaseInsensitive_RDBStage01(t *testing.T) {
-	requireRDBStage(t, 1)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -494,7 +475,7 @@ func TestConfigGetDir_CaseInsensitive_RDBStage01(t *testing.T) {
 }
 
 func TestConfigGetDbfilename_CustomName_RDBStage01(t *testing.T) {
-	requireRDBStage(t, 1)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "my-custom-db.rdb"
@@ -515,7 +496,7 @@ func TestConfigGetDbfilename_CustomName_RDBStage01(t *testing.T) {
 // ========== Additional RDB Stage 2 Tests ==========
 
 func TestReadSingleKeyFromRDB_EmptyDB_RDBStage02(t *testing.T) {
-	requireRDBStage(t, 2)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -536,7 +517,7 @@ func TestReadSingleKeyFromRDB_EmptyDB_RDBStage02(t *testing.T) {
 }
 
 func TestReadSingleKeyFromRDB_LongKeyName_RDBStage02(t *testing.T) {
-	requireRDBStage(t, 2)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -563,7 +544,7 @@ func TestReadSingleKeyFromRDB_LongKeyName_RDBStage02(t *testing.T) {
 // ========== Additional RDB Stage 3 Tests ==========
 
 func TestReadStringValueFromRDB_EmptyValue_RDBStage03(t *testing.T) {
-	requireRDBStage(t, 3)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -584,7 +565,7 @@ func TestReadStringValueFromRDB_EmptyValue_RDBStage03(t *testing.T) {
 }
 
 func TestReadStringValueFromRDB_NonExistentKey_RDBStage03(t *testing.T) {
-	requireRDBStage(t, 3)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -606,7 +587,7 @@ func TestReadStringValueFromRDB_NonExistentKey_RDBStage03(t *testing.T) {
 }
 
 func TestReadStringValueFromRDB_LongValue_RDBStage03(t *testing.T) {
-	requireRDBStage(t, 3)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -631,7 +612,7 @@ func TestReadStringValueFromRDB_LongValue_RDBStage03(t *testing.T) {
 // ========== Additional RDB Stage 4 Tests ==========
 
 func TestReadMultipleKeysFromRDB_TenKeys_RDBStage04(t *testing.T) {
-	requireRDBStage(t, 4)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -670,7 +651,7 @@ func TestReadMultipleKeysFromRDB_TenKeys_RDBStage04(t *testing.T) {
 }
 
 func TestReadMultipleKeysFromRDB_SpecialCharacters_RDBStage04(t *testing.T) {
-	requireRDBStage(t, 4)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -707,7 +688,7 @@ func TestReadMultipleKeysFromRDB_SpecialCharacters_RDBStage04(t *testing.T) {
 // ========== Additional RDB Stage 5 Tests ==========
 
 func TestReadMultipleStringValuesFromRDB_SetOverridesRDB_RDBStage05(t *testing.T) {
-	requireRDBStage(t, 5)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -743,7 +724,7 @@ func TestReadMultipleStringValuesFromRDB_SetOverridesRDB_RDBStage05(t *testing.T
 }
 
 func TestReadMultipleStringValuesFromRDB_MixedWithInMemory_RDBStage05(t *testing.T) {
-	requireRDBStage(t, 5)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -780,7 +761,7 @@ func TestReadMultipleStringValuesFromRDB_MixedWithInMemory_RDBStage05(t *testing
 // ========== Additional RDB Stage 6 Tests ==========
 
 func TestExpiry_AllKeysExpired_RDBStage06(t *testing.T) {
-	requireRDBStage(t, 6)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -808,7 +789,7 @@ func TestExpiry_AllKeysExpired_RDBStage06(t *testing.T) {
 }
 
 func TestExpiry_AllKeysFuture_RDBStage06(t *testing.T) {
-	requireRDBStage(t, 6)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -840,7 +821,7 @@ func TestExpiry_AllKeysFuture_RDBStage06(t *testing.T) {
 }
 
 func TestExpiry_MixedWithKeysCommand_RDBStage06(t *testing.T) {
-	requireRDBStage(t, 6)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "dump.rdb"
@@ -893,7 +874,7 @@ func TestExpiry_MixedWithKeysCommand_RDBStage06(t *testing.T) {
 }
 
 func TestNoRDBFile_ServerStartsClean_RDBStage02(t *testing.T) {
-	requireRDBStage(t, 2)
+	requireRDBStage(t)
 
 	dir := t.TempDir()
 	dbfilename := "nonexistent.rdb"

@@ -3,7 +3,6 @@ package tests
 import (
 	"bufio"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,28 +13,9 @@ import (
 // TINYRED_GEOSPATIAL_STAGE, every geospatial test in this file is skipped.
 // None of GEOADD/GEOPOS/GEODIST/GEOSEARCH (nor the sorted set commands this
 // phase is built on top of) are implemented yet.
-const defaultMaxGeospatialStage = 0
-
-func maxGeospatialStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_GEOSPATIAL_STAGE"))
-	if raw == "" {
-		return defaultMaxGeospatialStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxGeospatialStage
-	}
-	if v > 8 {
-		return 8
-	}
-	return v
-}
-
-func requireGeospatialStage(t *testing.T, stage int) {
+func requireGeospatialStage(t *testing.T) {
 	t.Helper()
-	if stage > maxGeospatialStage() {
-		t.Skipf("skipping geospatial stage %d test; set TINYRED_GEOSPATIAL_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseGeospatial)
 }
 
 // geoReadSimpleError reads a RESP simple error line (e.g. "-ERR message\r\n")
@@ -113,7 +93,7 @@ func geoAssertSameSet(t *testing.T, got, want []string) {
 // --- Stage 01 (doc stage 100): Respond to GEOADD ---
 
 func TestGeoAddRespondsWithIntegerCount_Stage01GeoAddBasic(t *testing.T) {
-	requireGeospatialStage(t, 1)
+	requireGeospatialStage(t)
 	// Scenario: GEOADD with a single valid location returns the count of locations added as a RESP integer.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -128,7 +108,7 @@ func TestGeoAddRespondsWithIntegerCount_Stage01GeoAddBasic(t *testing.T) {
 // --- Stage 02 (doc stage 101): Validate coordinates ---
 
 func TestGeoAddRejectsInvalidLatitude_Stage02ValidateCoordinates(t *testing.T) {
-	requireGeospatialStage(t, 2)
+	requireGeospatialStage(t)
 	// Scenario: latitude 100 is out of the valid [-85.05112878, 85.05112878] range, so GEOADD
 	// must return a RESP simple error starting with "ERR" and mentioning "latitude".
 	sp := startTinyRed(t)
@@ -145,7 +125,7 @@ func TestGeoAddRejectsInvalidLatitude_Stage02ValidateCoordinates(t *testing.T) {
 }
 
 func TestGeoAddRejectsInvalidLongitude_Stage02ValidateCoordinates(t *testing.T) {
-	requireGeospatialStage(t, 2)
+	requireGeospatialStage(t)
 	// Scenario: longitude 181 is out of the valid [-180, 180] range (latitude 0.3 is valid),
 	// so GEOADD must return a RESP simple error starting with "ERR" and mentioning "longitude".
 	sp := startTinyRed(t)
@@ -162,7 +142,7 @@ func TestGeoAddRejectsInvalidLongitude_Stage02ValidateCoordinates(t *testing.T) 
 }
 
 func TestGeoAddAcceptsBoundaryCoordinates_Stage02ValidateCoordinates(t *testing.T) {
-	requireGeospatialStage(t, 2)
+	requireGeospatialStage(t)
 	// Scenario: the boundary values -180/+180 (longitude) and -85.05112878/+85.05112878 (latitude)
 	// are inclusive-valid, so GEOADD must succeed for both.
 	sp := startTinyRed(t)
@@ -184,7 +164,7 @@ func TestGeoAddAcceptsBoundaryCoordinates_Stage02ValidateCoordinates(t *testing.
 // --- Stage 03 (doc stage 102): Store a location ---
 
 func TestGeoAddStoresLocationInSortedSet_Stage03StoreLocation(t *testing.T) {
-	requireGeospatialStage(t, 3)
+	requireGeospatialStage(t)
 	// Scenario: GEOADD must store the member in a sorted set retrievable via ZRANGE.
 	// This stage allows the score to be hardcoded to 0, so only membership is checked.
 	sp := startTinyRed(t)
@@ -207,7 +187,7 @@ func TestGeoAddStoresLocationInSortedSet_Stage03StoreLocation(t *testing.T) {
 // --- Stage 04 (doc stage 103): Calculate location score ---
 
 func TestGeoAddCalculatesLocationScore_Stage04CalculateScore(t *testing.T) {
-	requireGeospatialStage(t, 4)
+	requireGeospatialStage(t)
 	// Scenario: GEOADD converts latitude/longitude into a geocoded score, retrievable via ZSCORE.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -239,7 +219,7 @@ func TestGeoAddCalculatesLocationScore_Stage04CalculateScore(t *testing.T) {
 // --- Stage 05 (doc stage 104): Respond to GEOPOS ---
 
 func TestGeoPosRespondsWithStructure_Stage05GeoPosStructure(t *testing.T) {
-	requireGeospatialStage(t, 5)
+	requireGeospatialStage(t)
 	// Scenario: GEOPOS on existing locations returns one entry per requested location; this
 	// stage allows lon/lat to be hardcoded, so only the structural shape is asserted.
 	sp := startTinyRed(t)
@@ -273,7 +253,7 @@ func TestGeoPosRespondsWithStructure_Stage05GeoPosStructure(t *testing.T) {
 }
 
 func TestGeoPosMissingLocationReturnsNullArray_Stage05GeoPosStructure(t *testing.T) {
-	requireGeospatialStage(t, 5)
+	requireGeospatialStage(t)
 	// Scenario: GEOPOS for a location that doesn't exist under an existing key returns a null array entry.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -289,7 +269,7 @@ func TestGeoPosMissingLocationReturnsNullArray_Stage05GeoPosStructure(t *testing
 }
 
 func TestGeoPosMissingKeyReturnsNullArrays_Stage05GeoPosStructure(t *testing.T) {
-	requireGeospatialStage(t, 5)
+	requireGeospatialStage(t)
 	// Scenario: GEOPOS against a key that doesn't exist at all returns a null array for every requested member.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -306,7 +286,7 @@ func TestGeoPosMissingKeyReturnsNullArrays_Stage05GeoPosStructure(t *testing.T) 
 // --- Stage 06 (doc stage 105): Decode coordinates ---
 
 func TestGeoPosDecodesStoredCoordinates_Stage06DecodeCoordinates(t *testing.T) {
-	requireGeospatialStage(t, 6)
+	requireGeospatialStage(t)
 	// Scenario: GEOPOS must decode a precomputed geocoded score (set directly via ZADD) back
 	// into longitude/latitude values, accurate to within 1e-5 of the documented expected values.
 	sp := startTinyRed(t)
@@ -346,7 +326,7 @@ func TestGeoPosDecodesStoredCoordinates_Stage06DecodeCoordinates(t *testing.T) {
 // --- Stage 07 (doc stage 106): Calculate distance ---
 
 func TestGeoDistCalculatesDistanceBetweenLocations_Stage07GeoDist(t *testing.T) {
-	requireGeospatialStage(t, 7)
+	requireGeospatialStage(t)
 	// Scenario: GEODIST returns the Haversine distance in meters between two members of a key,
 	// as a RESP bulk string, within 1 meter of the documented expected value.
 	sp := startTinyRed(t)
@@ -379,7 +359,7 @@ func TestGeoDistCalculatesDistanceBetweenLocations_Stage07GeoDist(t *testing.T) 
 // --- Stage 08 (doc stage 107): Search within radius ---
 
 func TestGeoSearchFindsSingleLocationWithinRadius_Stage08GeoSearch(t *testing.T) {
-	requireGeospatialStage(t, 8)
+	requireGeospatialStage(t)
 	// Scenario: GEOSEARCH FROMLONLAT ... BYRADIUS 100000 m from (2, 48) should find only Paris.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -400,7 +380,7 @@ func TestGeoSearchFindsSingleLocationWithinRadius_Stage08GeoSearch(t *testing.T)
 }
 
 func TestGeoSearchFindsMultipleLocationsAsSet_Stage08GeoSearch(t *testing.T) {
-	requireGeospatialStage(t, 8)
+	requireGeospatialStage(t)
 	// Scenario: GEOSEARCH FROMLONLAT ... BYRADIUS 500000 m from (2, 48) should find Paris and
 	// London, in any order.
 	sp := startTinyRed(t)
@@ -419,7 +399,7 @@ func TestGeoSearchFindsMultipleLocationsAsSet_Stage08GeoSearch(t *testing.T) {
 }
 
 func TestGeoSearchFindsDifferentLocationWithinRadius_Stage08GeoSearch(t *testing.T) {
-	requireGeospatialStage(t, 8)
+	requireGeospatialStage(t)
 	// Scenario: GEOSEARCH FROMLONLAT ... BYRADIUS 300000 m from (11, 50) should find only Munich.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ const (
 
 const (
 	ErrorMessageStringTypeCaste string = "internal error: list value is not []string"
+	ErrorMessageZsetTypeCaste   string = "internal error: Zset value is not *Zset"
 )
 
 const (
@@ -48,12 +50,14 @@ const (
 const (
 	ClientModeNormal      string = "normal"
 	ClientModeTransaction string = "transaction"
+	ClientModeSubscribed  string = "subscribe"
 )
 
 var TransactionalCommands map[string]bool = map[string]bool{
 	MULTI:   true,
 	DISCARD: true,
 	EXEC:    true,
+	WATCH:   true,
 }
 
 type Request struct {
@@ -76,50 +80,67 @@ type Config struct {
 }
 
 type Client struct {
-	ClientType   string
-	Id           int64
-	Mode         string
-	Conn         net.Conn
-	CommandQueue []Request
+	ClientType         string
+	Id                 int64
+	Mode               string
+	Conn               net.Conn
+	CommandQueue       []Request
+	WatchedKeys        map[string]bool
+	DirtyCompareAndSet bool
+	SubscribedChannels map[string]bool
 }
 type Server struct {
-	Logger          *slog.Logger
-	Config          *Config
-	Store           *store.Store
-	CommandHandlers map[string]CommandEntry
-	RDB             rdb.RDBProcessor
-	AOF             aof.AOF
-	Clients         map[int64]*Client
-	ExecutionMutex  sync.RWMutex
+	Logger              *slog.Logger
+	Config              *Config
+	Store               *store.Store
+	CommandHandlers     map[string]CommandEntry
+	RDB                 rdb.RDBProcessor
+	AOF                 aof.AOF
+	Clients             map[int64]*Client
+	ExecutionMutex      sync.RWMutex
+	WatcherClients      map[string][]int64
+	SubscribersMetaData map[string][]int64
 }
 
 func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb.RDBProcessor) (*Server, error) {
 	s := &Server{
-		Config:         config,
-		Logger:         logger,
-		Store:          st,
-		RDB:            rdbProc,
-		Clients:        make(map[int64]*Client),
-		ExecutionMutex: sync.RWMutex{},
+		Config:              config,
+		Logger:              logger,
+		Store:               st,
+		RDB:                 rdbProc,
+		Clients:             make(map[int64]*Client),
+		ExecutionMutex:      sync.RWMutex{},
+		WatcherClients:      map[string][]int64{},
+		SubscribersMetaData: map[string][]int64{},
 	}
 
 	s.CommandHandlers = map[string]CommandEntry{
-		ECHO:    {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1, IsWrite: false},
-		SET:     {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		GET:     {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		PING:    {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1, IsWrite: false},
-		CONFIG:  {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1, IsWrite: false},
-		KEYS:    {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		RPUSH:   {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		LPUSH:   {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		LRANGE:  {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1, IsWrite: false},
-		LPOP:    {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2, IsWrite: true},
-		LLEN:    {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1, IsWrite: false},
-		BLPOP:   {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1, IsWrite: true},
-		INCR:    {Handler: s.HandleINCR, MinArgs: 1, MaxArgs: 1, IsWrite: true},
-		MULTI:   {Handler: s.HandleMULTI, MinArgs: 0, MaxArgs: 0, IsWrite: false},
-		DISCARD: {Handler: s.HandleDiscard, MinArgs: 0, MaxArgs: 0, IsWrite: false},
-		// EXEC:    {Handler: s.HandleExec, MinArgs: 0, MaxArgs: 0, IsWrite: true},
+		ECHO:        {Handler: s.HandleEcho, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		SET:         {Handler: s.HandleSet, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		GET:         {Handler: s.HandleGet, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		PING:        {Handler: s.HandlePing, MinArgs: 0, MaxArgs: -1, IsWrite: false},
+		CONFIG:      {Handler: s.HandleConfig, MinArgs: 2, MaxArgs: -1, IsWrite: false},
+		KEYS:        {Handler: s.HandleKeys, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		RPUSH:       {Handler: s.HandleRPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LPUSH:       {Handler: s.HandleLPush, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		LRANGE:      {Handler: s.HandleLRange, MinArgs: 3, MaxArgs: -1, IsWrite: false},
+		LPOP:        {Handler: s.HandleLPop, MinArgs: 1, MaxArgs: 2, IsWrite: true},
+		LLEN:        {Handler: s.HandleLLen, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		BLPOP:       {Handler: s.HandleBLPop, MinArgs: 2, MaxArgs: -1, IsWrite: true},
+		INCR:        {Handler: s.HandleINCR, MinArgs: 1, MaxArgs: 1, IsWrite: true},
+		MULTI:       {Handler: s.HandleMulti, MinArgs: 0, MaxArgs: 0, IsWrite: false},
+		DISCARD:     {Handler: s.HandleDiscard, MinArgs: 0, MaxArgs: 0, IsWrite: false},
+		WATCH:       {Handler: s.HandleWatch, MinArgs: 1, MaxArgs: -1, IsWrite: false},
+		UNWATCH:     {Handler: s.HandleUnwatch, MinArgs: 0, MaxArgs: 0, IsWrite: false},
+		SUBSCRIBE:   {Handler: s.HandleSubscribe, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		PUBLISH:     {Handler: s.HandlePublish, MinArgs: 1, MaxArgs: 2, IsWrite: false},
+		UNSUBSCRIBE: {Handler: s.HandleUnsubscribe, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		ZADD:        {Handler: s.HandleZAdd, MinArgs: 3, MaxArgs: -1, IsWrite: true},
+		ZCARD:       {Handler: s.HandleZCard, MinArgs: 1, MaxArgs: 1, IsWrite: false},
+		ZRANGE:      {Handler: s.HandleZRange, MinArgs: 3, MaxArgs: 3, IsWrite: false},
+		ZRANK:       {Handler: s.HandleZRank, MinArgs: 2, MaxArgs: 2, IsWrite: false},
+		ZSCORE:      {Handler: s.HandleZScore, MinArgs: 2, MaxArgs: 2, IsWrite: false},
+		ZREM:        {Handler: s.HandleZRem, MinArgs: 2, MaxArgs: 2, IsWrite: true},
 	}
 
 	if config.Dir != "" && config.Dbfilename != "" {
@@ -150,10 +171,13 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 				Arguments: args[1:],
 			}
 			client := Client{
-				ClientType: TypeClientInternal,
-				Id:         getNewClientId(),
-				Mode:       ClientModeNormal,
-				Conn:       &net.TCPConn{},
+				ClientType:         TypeClientInternal,
+				Id:                 getNewClientId(),
+				Mode:               ClientModeNormal,
+				Conn:               &net.TCPConn{},
+				CommandQueue:       make([]Request, 0),
+				WatchedKeys:        make(map[string]bool, 0),
+				SubscribedChannels: make(map[string]bool, 0),
 			}
 			_, err := s.Execute(req, &client)
 			return err
@@ -190,8 +214,23 @@ func (s *Server) Execute(req Request, c *Client) ([]byte, error) {
 			}).Marshal(), nil
 		}
 	}
-
-	return cmd.Handler(req, c)
+	data, err := cmd.Handler(req, c)
+	if err != nil {
+		return data, err
+	}
+	//this is not thread safe, will make this thread safe when we restructure the codebase
+	if cmd.IsWrite {
+		key := req.Arguments[0]
+		watcherList, ok := s.WatcherClients[key]
+		if !ok {
+			return data, nil
+		}
+		for _, watcherId := range watcherList {
+			watcher := s.Clients[watcherId]
+			watcher.DirtyCompareAndSet = true
+		}
+	}
+	return data, err
 }
 func (s *Server) ListenAndServe() error {
 	port := fmt.Sprintf(":%d", s.Config.Port)
@@ -217,11 +256,13 @@ func getNewClientId() int64 {
 func (s *Server) AddClient(conn net.Conn) *Client {
 	clientId := getNewClientId()
 	client := &Client{
-		Id:           clientId,
-		ClientType:   TypeClientExternal,
-		Mode:         ClientModeNormal,
-		Conn:         conn,
-		CommandQueue: make([]Request, 0),
+		Id:                 clientId,
+		ClientType:         TypeClientExternal,
+		Mode:               ClientModeNormal,
+		Conn:               conn,
+		CommandQueue:       make([]Request, 0),
+		WatchedKeys:        make(map[string]bool, 0),
+		SubscribedChannels: make(map[string]bool, 0),
 	}
 
 	s.Clients[clientId] = client
@@ -348,6 +389,36 @@ func (s *Server) ExecuteInTransaction(req Request, c *Client) []byte {
 	return data
 }
 
+func (c *Client) ResetTransactionState() {
+	c.CommandQueue = []Request{}
+	c.Mode = ClientModeNormal
+}
+func (s *Server) UnwatchAll(c *Client) {
+	// Remove c from each key's global watcher list.
+	keys := c.WatchedKeys
+	for key := range keys {
+		watchers, ok := s.WatcherClients[key]
+		if !ok {
+			break
+		}
+		i := slices.Index(watchers, c.Id)
+		if i == -1 {
+			continue
+		}
+		watchers = slices.Delete(watchers, i, i+1)
+		if len(watchers) == 0 {
+			delete(s.WatcherClients, key)
+		}
+		s.WatcherClients[key] = watchers
+	}
+	c.WatchedKeys = map[string]bool{}
+	c.DirtyCompareAndSet = false
+}
+
+func (s *Server) ResetTransactionState(c *Client) {
+	s.UnwatchAll(c)
+	c.ResetTransactionState()
+}
 func (s *Server) HandleConnection(c *Client) {
 	reader := bufio.NewReader(c.Conn)
 	defer s.CloseConnection(c)
@@ -380,6 +451,22 @@ func (s *Server) HandleConnection(c *Client) {
 			break
 		}
 
+		if c.Mode == ClientModeSubscribed {
+			allowed, ok := SubcribedModeCommands[req.Command]
+			if !ok || !allowed {
+				data := (&resp.SimpleError{
+					Type:    resp.ERR,
+					Message: fmt.Sprintf("Can't execute %s: only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context", req.Command),
+				}).Marshal()
+				_, err = c.Conn.Write(data)
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
+				}
+				continue
+			}
+		}
+		//SubcribedModeCommands
 		if req.Command == EXEC {
 			if c.Mode != ClientModeTransaction {
 				se := resp.SimpleError{
@@ -394,12 +481,22 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 				continue
 			}
+
+			if c.DirtyCompareAndSet {
+				s.ResetTransactionState(c)
+				data := (&resp.NullArray{}).Marshal()
+				_, err = c.Conn.Write(data)
+				if err != nil {
+					s.Logger.Error("error writing response", "err", err.Error())
+					break
+				}
+				continue
+			}
 			s.ExecutionMutex.Lock()
 			AOFData := make([]byte, 0)
 			response := resp.Array{}
 			queue := s.Clients[c.Id].CommandQueue
-			c.CommandQueue = []Request{}
-			c.Mode = ClientModeNormal
+			s.ResetTransactionState(c)
 			for _, req := range queue {
 				data := s.ExecuteInTransaction(req, c)
 				response.Value = append(response.Value, string(data))

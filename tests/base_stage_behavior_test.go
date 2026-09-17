@@ -22,28 +22,9 @@ import (
 	"tinyred/store"
 )
 
-const defaultMaxBaseStage = 7
-
-func maxBaseStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_BASE_STAGE"))
-	if raw == "" {
-		return defaultMaxBaseStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxBaseStage
-	}
-	if v > 7 {
-		return 7
-	}
-	return v
-}
-
-func requireStage(t *testing.T, stage int) {
+func requireStage(t *testing.T) {
 	t.Helper()
-	if stage > maxBaseStage() {
-		t.Skipf("skipping stage %d test; set TINYRED_BASE_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseBase)
 }
 
 type serverProc struct {
@@ -193,7 +174,7 @@ func readBulkString(t *testing.T, r *bufio.Reader) string {
 }
 
 func TestAcceptsTCPConnectionOnConfiguredPort_Stage01BindToPort(t *testing.T) {
-	requireStage(t, 1)
+	requireStage(t)
 	// Scenario: server is started and should accept a TCP connection on its port.
 	sp := startTinyRed(t)
 
@@ -205,7 +186,7 @@ func TestAcceptsTCPConnectionOnConfiguredPort_Stage01BindToPort(t *testing.T) {
 }
 
 func TestRespondsWithPongWhenPingIsReceived_Stage02RespondToPing(t *testing.T) {
-	requireStage(t, 2)
+	requireStage(t)
 	// Scenario: client sends PING and server replies with RESP simple string PONG.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -228,7 +209,7 @@ func TestRespondsWithPongWhenPingIsReceived_Stage02RespondToPing(t *testing.T) {
 }
 
 func TestHandlesMultiplePingCommandsOnSameConnection_Stage03MultiplePings(t *testing.T) {
-	requireStage(t, 3)
+	requireStage(t)
 	// Scenario: two PING commands on one connection yield two independent PONG responses.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -245,7 +226,7 @@ func TestHandlesMultiplePingCommandsOnSameConnection_Stage03MultiplePings(t *tes
 }
 
 func TestServesConcurrentClientsWithoutDroppingResponses_Stage04ConcurrentClients(t *testing.T) {
-	requireStage(t, 4)
+	requireStage(t)
 	// Scenario: two clients concurrently send PING and each receives its own PONG.
 	sp := startTinyRed(t)
 
@@ -277,7 +258,7 @@ func TestServesConcurrentClientsWithoutDroppingResponses_Stage04ConcurrentClient
 }
 
 func TestEchoReturnsArgumentAsBulkString_Stage05Echo(t *testing.T) {
-	requireStage(t, 5)
+	requireStage(t)
 	// Scenario: ECHO with one argument should return that exact payload as RESP bulk string.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -289,7 +270,7 @@ func TestEchoReturnsArgumentAsBulkString_Stage05Echo(t *testing.T) {
 }
 
 func TestSetStoresValueAndGetReturnsStoredOrNull_Stage06SetGet(t *testing.T) {
-	requireStage(t, 6)
+	requireStage(t)
 	// Scenario: SET stores key/value, GET returns stored value, and missing keys return null bulk string.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -311,7 +292,7 @@ func TestSetStoresValueAndGetReturnsStoredOrNull_Stage06SetGet(t *testing.T) {
 }
 
 func TestSetWithPxExpiresKeyAfterSpecifiedDuration_Stage07ExpiryPX(t *testing.T) {
-	requireStage(t, 7)
+	requireStage(t)
 	// Scenario: SET with PX allows immediate read, then key expires and GET returns null.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)
@@ -334,7 +315,7 @@ func TestSetWithPxExpiresKeyAfterSpecifiedDuration_Stage07ExpiryPX(t *testing.T)
 }
 
 func TestDoesNotSendDataBeforeAnyCommandIsReceived_Stage02NoUnsolicitedOutput(t *testing.T) {
-	requireStage(t, 2)
+	requireStage(t)
 	// Scenario: idle connection should not receive unsolicited bytes before any request.
 	sp := startTinyRed(t)
 	conn, r := dialClient(t, sp)

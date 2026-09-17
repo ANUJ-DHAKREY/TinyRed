@@ -2,7 +2,6 @@ package tests
 
 import (
 	"bufio"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,28 +10,9 @@ import (
 // Custom stage: PHASE C5 — BATCH STRING OPS (not part of CodeCrafters).
 // See CUSTOM_STAGES.md, "PHASE C5: BATCH STRING OPS" for the full spec.
 
-const defaultMaxCustomStringOpsStage = 0
-
-func maxCustomStringOpsStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_CUSTOM_STRINGOPS_STAGE"))
-	if raw == "" {
-		return defaultMaxCustomStringOpsStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxCustomStringOpsStage
-	}
-	if v > 6 {
-		return 6
-	}
-	return v
-}
-
-func requireCustomStringOpsStage(t *testing.T, stage int) {
+func requireCustomStringOpsStage(t *testing.T) {
 	t.Helper()
-	if stage > maxCustomStringOpsStage() {
-		t.Skipf("skipping custom stringops stage %d test; set TINYRED_CUSTOM_STRINGOPS_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseCustomStringOperations)
 }
 
 // customStringOpsReadMGetArray reads a RESP array whose elements may be a mix
@@ -71,7 +51,7 @@ func customStringOpsReadMGetArray(t *testing.T, r *bufio.Reader) []*string {
 // --- Stage 1: MSET ---
 
 func TestMSetStoresMultipleKeys_Stage01MSet(t *testing.T) {
-	requireCustomStringOpsStage(t, 1)
+	requireCustomStringOpsStage(t)
 	// Scenario: MSET sets several key-value pairs at once, replying +OK, and
 	// each key is subsequently retrievable via GET.
 	sp := startTinyRed(t)
@@ -101,7 +81,7 @@ func TestMSetStoresMultipleKeys_Stage01MSet(t *testing.T) {
 // --- Stage 2: MGET ---
 
 func TestMGetReturnsMixOfValuesAndNulls_Stage02MGet(t *testing.T) {
-	requireCustomStringOpsStage(t, 2)
+	requireCustomStringOpsStage(t)
 	// Scenario: MGET returns a RESP array with the value for an existing key
 	// and null bulk strings for keys that were never set.
 	sp := startTinyRed(t)
@@ -131,7 +111,7 @@ func TestMGetReturnsMixOfValuesAndNulls_Stage02MGet(t *testing.T) {
 // --- Stage 3: APPEND ---
 
 func TestAppendExtendsExistingAndCreatesMissingKey_Stage03Append(t *testing.T) {
-	requireCustomStringOpsStage(t, 3)
+	requireCustomStringOpsStage(t)
 	// Scenario: APPEND extends an existing string and returns the new total
 	// length; APPEND on a missing key creates it with the appended value.
 	sp := startTinyRed(t)
@@ -166,7 +146,7 @@ func TestAppendExtendsExistingAndCreatesMissingKey_Stage03Append(t *testing.T) {
 // --- Stage 4: DECR ---
 
 func TestDecrDecrementsCreatesAndErrorsOnNonInteger_Stage04Decr(t *testing.T) {
-	requireCustomStringOpsStage(t, 4)
+	requireCustomStringOpsStage(t)
 	// Scenario: DECR decrements an existing integer value, creates missing
 	// keys at -1, and errors when the existing value isn't an integer.
 	sp := startTinyRed(t)
@@ -205,7 +185,7 @@ func TestDecrDecrementsCreatesAndErrorsOnNonInteger_Stage04Decr(t *testing.T) {
 // --- Stage 5: INCRBY ---
 
 func TestIncrByAppliesPositiveAndNegativeAmounts_Stage05IncrBy(t *testing.T) {
-	requireCustomStringOpsStage(t, 5)
+	requireCustomStringOpsStage(t)
 	// Scenario: INCRBY increments by the given (possibly negative) amount,
 	// and creates missing keys starting from 0.
 	sp := startTinyRed(t)
@@ -235,7 +215,7 @@ func TestIncrByAppliesPositiveAndNegativeAmounts_Stage05IncrBy(t *testing.T) {
 // --- Stage 6: DECRBY ---
 
 func TestDecrByAppliesAmountAndCreatesMissingKey_Stage06DecrBy(t *testing.T) {
-	requireCustomStringOpsStage(t, 6)
+	requireCustomStringOpsStage(t)
 	// Scenario: DECRBY decrements by the given amount, and creates missing
 	// keys starting from 0.
 	sp := startTinyRed(t)

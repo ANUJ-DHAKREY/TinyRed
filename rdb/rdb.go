@@ -9,8 +9,7 @@ import (
 	"os"
 	"strconv"
 	"time"
-	"tinyred/resp"
-	"tinyred/store"
+	redStore "tinyred/store"
 )
 
 const (
@@ -107,7 +106,7 @@ type ResizeDBMetaData struct {
 }
 
 type RDBProcessor interface {
-	Load(dir string, store *store.Store) error
+	Load(dir string, store *redStore.Store) error
 }
 
 type RDBLoader struct {
@@ -319,7 +318,7 @@ func parseKeyWithType(reader *bufio.Reader, valueType byte) (ParsedKeyPair, erro
 	}, nil
 }
 
-func (r *RDBLoader) Load(filepath string, store *store.Store) error {
+func (r *RDBLoader) Load(filepath string, store *redStore.Store) error {
 	//read the file if not accesible or do not exit then ignore the file
 	f, err := os.Open(filepath)
 	if err != nil {
@@ -386,8 +385,8 @@ func (r *RDBLoader) Load(filepath string, store *store.Store) error {
 			if parsedData.ExpireAt.Unix() <= time.Now().Unix() {
 				continue
 			}
-			entry := &resp.Entry{
-				Type:     resp.EntryTypeString,
+			entry := &redStore.Entry{
+				Type:     redStore.EntryTypeString,
 				Value:    parsedData.Value,
 				ExpireAt: parsedData.ExpireAt,
 			}
@@ -401,8 +400,8 @@ func (r *RDBLoader) Load(filepath string, store *store.Store) error {
 			if parsedData.ExpireAt.Unix() <= time.Now().Unix() {
 				continue
 			}
-			entry := &resp.Entry{
-				Type:     resp.EntryTypeString,
+			entry := &redStore.Entry{
+				Type:     redStore.EntryTypeString,
 				Value:    parsedData.Value,
 				ExpireAt: parsedData.ExpireAt,
 			}
@@ -416,8 +415,8 @@ func (r *RDBLoader) Load(filepath string, store *store.Store) error {
 			if err != nil {
 				return err
 			}
-			entry := &resp.Entry{
-				Type:  resp.EntryTypeString,
+			entry := &redStore.Entry{
+				Type:  redStore.EntryTypeString,
 				Value: parsedData.Value,
 			}
 			store.Set(parsedData.Key, entry)

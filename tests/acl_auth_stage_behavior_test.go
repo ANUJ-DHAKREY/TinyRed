@@ -4,34 +4,14 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-const defaultMaxACLAuthStage = 0
-
-func maxACLAuthStage() int {
-	raw := strings.TrimSpace(os.Getenv("TINYRED_ACL_AUTH_STAGE"))
-	if raw == "" {
-		return defaultMaxACLAuthStage
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 1 {
-		return defaultMaxACLAuthStage
-	}
-	if v > 8 {
-		return 8
-	}
-	return v
-}
-
-func requireACLAuthStage(t *testing.T, stage int) {
+func requireACLAuthStage(t *testing.T) {
 	t.Helper()
-	if stage > maxACLAuthStage() {
-		t.Skipf("skipping acl/auth stage %d test; set TINYRED_ACL_AUTH_STAGE=%d (or higher) to run", stage, stage)
-	}
+	requirePhase(t, phaseACLAuth)
 }
 
 // aclReadGetUserResponse reads the response to ACL GETUSER: an outer RESP array
@@ -47,7 +27,7 @@ func aclReadGetUserResponse(t *testing.T, r *bufio.Reader) map[string][]string {
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(header, "*")))
 	if err != nil {
-		t.Fatalf("invalid RESP array length %q: %v", header, err)
+		t.Fatalf("in valid RESP array length %q: %v", header, err)
 	}
 
 	result := make(map[string][]string)
@@ -106,7 +86,7 @@ func aclSHA256Hex(password string) string {
 // --- Stage 1 (doc 108): ACL WHOAMI ---
 
 func TestACLWhoAmiReturnsDefault_Stage01ACLWhoAmi(t *testing.T) {
-	requireACLAuthStage(t, 1)
+	requireACLAuthStage(t)
 	// Scenario: a fresh connection is auto-authenticated as "default"; ACL WHOAMI
 	// should report that username as a RESP bulk string.
 	sp := startTinyRed(t)
@@ -121,7 +101,7 @@ func TestACLWhoAmiReturnsDefault_Stage01ACLWhoAmi(t *testing.T) {
 // --- Stage 2 (doc 109): ACL GETUSER (flags only, hardcoded empty) ---
 
 func TestACLGetUserFlagsEmpty_Stage02ACLGetUserFlags(t *testing.T) {
-	requireACLAuthStage(t, 2)
+	requireACLAuthStage(t)
 	// Scenario: at this stage the default user's flags are hardcoded to an
 	// empty array since nothing has been reported yet.
 	sp := startTinyRed(t)
@@ -137,7 +117,7 @@ func TestACLGetUserFlagsEmpty_Stage02ACLGetUserFlags(t *testing.T) {
 // --- Stage 3 (doc 110): the nopass flag ---
 
 func TestACLGetUserNoPassFlag_Stage03NoPassFlag(t *testing.T) {
-	requireACLAuthStage(t, 3)
+	requireACLAuthStage(t)
 	// Scenario: a fresh default user has the "nopass" flag set, which is why
 	// new connections are auto-authenticated.
 	sp := startTinyRed(t)
@@ -153,7 +133,7 @@ func TestACLGetUserNoPassFlag_Stage03NoPassFlag(t *testing.T) {
 // --- Stage 4 (doc 111): the passwords property ---
 
 func TestACLGetUserPasswordsProperty_Stage04PasswordsProperty(t *testing.T) {
-	requireACLAuthStage(t, 4)
+	requireACLAuthStage(t)
 	// Scenario: the default user reports nopass in flags and an empty
 	// passwords array since no password has ever been configured.
 	sp := startTinyRed(t)
@@ -172,7 +152,7 @@ func TestACLGetUserPasswordsProperty_Stage04PasswordsProperty(t *testing.T) {
 // --- Stage 5 (doc 112): setting default user password ---
 
 func TestACLSetUserPasswordUpdatesFlags_Stage05SetUserPassword(t *testing.T) {
-	requireACLAuthStage(t, 5)
+	requireACLAuthStage(t)
 	// Scenario: setting a password for default via ACL SETUSER removes the
 	// nopass flag and stores the SHA-256 hash of the password.
 	sp := startTinyRed(t)
@@ -207,7 +187,7 @@ func TestACLSetUserPasswordUpdatesFlags_Stage05SetUserPassword(t *testing.T) {
 // --- Stage 6 (doc 113): the AUTH command ---
 
 func TestAuthCommandWrongAndCorrectPassword_Stage06AuthCommand(t *testing.T) {
-	requireACLAuthStage(t, 6)
+	requireACLAuthStage(t)
 	// Scenario: after setting a password, AUTH with the wrong password fails
 	// with a WRONGPASS error, and AUTH with the correct password succeeds.
 	sp := startTinyRed(t)
@@ -233,7 +213,7 @@ func TestAuthCommandWrongAndCorrectPassword_Stage06AuthCommand(t *testing.T) {
 // --- Stage 7 (doc 114): enforce authentication ---
 
 func TestEnforceAuthenticationRejectsUnauthenticatedConnection_Stage07EnforceAuth(t *testing.T) {
-	requireACLAuthStage(t, 7)
+	requireACLAuthStage(t)
 	// Scenario: once a password is set for default, already-authenticated
 	// connections stay logged in, but brand new connections start out
 	// unauthenticated and get NOAUTH on any command.
@@ -262,7 +242,7 @@ func TestEnforceAuthenticationRejectsUnauthenticatedConnection_Stage07EnforceAut
 // --- Stage 8 (doc 115): authenticate using AUTH ---
 
 func TestAuthenticateUsingAuthAllowsCommands_Stage08AuthenticateUsingAuth(t *testing.T) {
-	requireACLAuthStage(t, 8)
+	requireACLAuthStage(t)
 	// Scenario: a fresh, unauthenticated connection gets NOAUTH on any command
 	// (not just ACL commands), but after a successful AUTH it can run commands
 	// normally for the rest of that connection.
