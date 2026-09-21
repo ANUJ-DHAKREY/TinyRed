@@ -141,6 +141,10 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		ZRANK:       {Handler: s.HandleZRank, MinArgs: 2, MaxArgs: 2, IsWrite: false},
 		ZSCORE:      {Handler: s.HandleZScore, MinArgs: 2, MaxArgs: 2, IsWrite: false},
 		ZREM:        {Handler: s.HandleZRem, MinArgs: 2, MaxArgs: 2, IsWrite: true},
+		GEOADD:      {Handler: s.HandleGeoAdd, MinArgs: 4, MaxArgs: 4, IsWrite: true},
+		GEOPOS:      {Handler: s.HandleGeoPos, MinArgs: 2, MaxArgs: -1, IsWrite: false},
+		GEODIST:     {Handler: s.HandleGeoDist, MinArgs: 3, MaxArgs: 3, IsWrite: false},
+		GEOSEARCH:   {Handler: s.HandleGeoSearch, MinArgs: 7, MaxArgs: 7, IsWrite: false},
 	}
 
 	if config.Dir != "" && config.Dbfilename != "" {

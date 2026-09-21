@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"tinyred/resp"
 )
 
 type Store struct {
@@ -20,8 +21,13 @@ type Entry struct {
 }
 
 type ZSet struct {
-	HashMap   map[string]float32
+	HashMap   map[string]float64
 	ZSkipList *SkipList
+}
+
+type ZSetEntry struct {
+	Member string
+	Score  float64
 }
 
 const (
@@ -54,6 +60,7 @@ const (
 
 const (
 	ErrorMessageStringTypeCaste string = "internal error: list value is not []string"
+	ErrorMessageZsetTypeCaste   string = "internal error: Zset value is not *Zset"
 )
 
 func New() *Store {
@@ -244,4 +251,52 @@ func (s *Store) Keys() []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func (s *Store) ZAdd(key string, entries []ZSetEntry) (int64, error) {
+	var membersAdded int64
+	_, err := s.Update(key, func(e *Entry) (*Entry, error) {
+		if e == nil {
+			zset := ZSet{
+				HashMap:   make(map[string]float64),
+				ZSkipList: NewSkipList(),
+			}
+			for _, pair := range entries {
+				zset.HashMap[pair.Member] = pair.Score
+				zset.ZSkipList.Insert(pair.Member, pair.Score)
+			}
+			membersAdded = int64(len(entries))
+			return &Entry{
+				Type:  EntryTypeSortedSet,
+				Value: zset,
+			}, nil
+		}
+
+		if e.Type != EntryTypeSortedSet {
+			return nil, &resp.SimpleError{
+				Type:    resp.ERR,
+				Message: resp.ErrorMessageWrongType,
+			}
+		}
+		zset, ok := e.Value.(ZSet)
+		if !ok {
+			return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
+		}
+		for _, pair := range entries {
+			oldScore, exists := zset.HashMap[pair.Member]
+			if exists {
+				zset.ZSkipList.Delete(pair.Member, oldScore)
+			} else {
+				membersAdded++
+			}
+			zset.ZSkipList.Insert(pair.Member, pair.Score)
+			zset.HashMap[pair.Member] = pair.Score
+		}
+		return e, nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+	return membersAdded, nil
 }

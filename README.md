@@ -20,22 +20,23 @@ redis-cli -p 6379
 - **Base**: TCP server, concurrent clients, `PING`, `ECHO`, `SET`/`GET` with expiry, `CONFIG GET`, `KEYS`
 - **Lists**: `RPUSH`, `LPUSH`, `LRANGE`, `LLEN`, `LPOP`, `BLPOP`
 - **Transactions**: `MULTI`, `EXEC`, `DISCARD`, `INCR`, command queueing, per-client isolated transaction state
+- **Optimistic Locking**: `WATCH` / `UNWATCH`, aborting a transaction if a watched key changed before `EXEC`
+- **Pub/Sub**: `SUBSCRIBE`, `PUBLISH`, `UNSUBSCRIBE`, restricted command set while in subscriber mode
+- **Sorted Sets**: `ZADD`, `ZCARD`, `ZRANGE`, `ZRANK`, `ZSCORE`, `ZREM`, backed by a skip list for ordered access
+- **Geospatial**: `GEOADD`, `GEOPOS`, `GEODIST`, `GEOSEARCH` (`FROMLONLAT`/`BYRADIUS`), built on top of sorted sets by encoding longitude/latitude into a single interleaved (Morton code) score; distance uses the Haversine formula
 - **AOF Persistence**: append-only file logging of write commands, manifest-based file tracking, replay on startup
 - **RDB Persistence**: loading an existing `dump.rdb` file on startup
 
 ## Supported Commands
 
-`PING` · `ECHO` · `SET` · `GET` · `CONFIG` · `KEYS` · `RPUSH` · `LPUSH` · `LPOP` · `LLEN` · `LRANGE` · `BLPOP` · `INCR` · `MULTI` · `EXEC` · `DISCARD`
+`PING` · `ECHO` · `SET` · `GET` · `CONFIG` · `KEYS` · `RPUSH` · `LPUSH` · `LPOP` · `LLEN` · `LRANGE` · `BLPOP` · `INCR` · `MULTI` · `EXEC` · `DISCARD` · `WATCH` · `UNWATCH` · `SUBSCRIBE` · `PUBLISH` · `UNSUBSCRIBE` · `ZADD` · `ZCARD` · `ZRANGE` · `ZRANK` · `ZSCORE` · `ZREM` · `GEOADD` · `GEOPOS` · `GEODIST` · `GEOSEARCH`
 
 ## Planned
 
-- Pub/Sub (`SUBSCRIBE`, `PUBLISH`, `UNSUBSCRIBE`)
-- Sorted Sets (`ZADD`, `ZRANGE`, `ZSCORE`, ...)
-- Geospatial commands (`GEOADD`, `GEOSEARCH`, ...)
 - Streams (`XADD`, `XRANGE`, `XREAD`, ...)
-- Optimistic locking (`WATCH` / `UNWATCH`)
 - Replication (`REPLCONF`, `PSYNC`, `WAIT`)
 - ACL / `AUTH`
+- Bitmaps
 - Custom extensions: hashes, sets, key management, active expiry, sharding, graceful shutdown, extra string ops, extra server commands
 
 ## Project Layout

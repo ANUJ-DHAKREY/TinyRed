@@ -26,7 +26,7 @@ func main() {
 	}
 	//base, RDB, list, AOF, transaction, optimistic locking
 	//pub-sub, sorted sets, geospatial commands,
-	//stream, replication, authentication
+	//replication, authentication, stream, bitmaps
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

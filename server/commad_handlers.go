@@ -42,6 +42,10 @@ const (
 	ZRANK        string = "zrank"
 	ZREM         string = "zrem"
 	ZSCORE       string = "zscore"
+	GEOADD       string = "geoadd"
+	GEOPOS       string = "geopos"
+	GEODIST      string = "geodist"
+	GEOSEARCH    string = "geosearch"
 )
 
 var SubcribedModeCommands = map[string]bool{
@@ -60,14 +64,279 @@ type CommandEntry struct {
 	IsWrite bool
 }
 
-type ZSetEntry struct {
-	Member string
-	Score  float32
+const (
+	MIN_LATITUDE  = -85.05112878
+	MAX_LATITUDE  = 85.05112878
+	MIN_LONGITUDE = -180.0
+	MAX_LONGITUDE = 180.0
+
+	LATITUDE_RANGE  = MAX_LATITUDE - MIN_LATITUDE
+	LONGITUDE_RANGE = MAX_LONGITUDE - MIN_LONGITUDE
+)
+
+const (
+	SourceTypeFromLonLat string = "fromlonlat"
+)
+
+const (
+	SearchTypeByRadius string = "byradius"
+)
+
+const (
+	SearchUnitMeter     string = "m"
+	SearchUnitKiloMeter string = "km"
+	SearchUnitMile      string = "mi"
+	SearchUnitFeet      string = "ft"
+)
+
+func (s *Server) HandleGeoAdd(req Request, c *Client) ([]byte, error) {
+	//GEOADD places -0.0884948 51.506479 "London"
+	zSetKey := req.Arguments[0]
+	longitude, err := strconv.ParseFloat(req.Arguments[1], 64)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageNotFloat,
+		}
+	}
+	latitude, err := strconv.ParseFloat(req.Arguments[2], 64)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageNotFloat,
+		}
+	}
+	member := req.Arguments[3]
+	isValid := ValidateCoordinates(longitude, latitude)
+	if !isValid {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: fmt.Sprintf("invalid longitude,latitude pair %f %f", longitude, latitude),
+		}
+	}
+
+	coordinates := Coordinates{
+		Latitude:  latitude,
+		Longitude: longitude,
+	}
+	mortonCode := Encode(coordinates)
+
+	memberAdded, err := s.Store.ZAdd(zSetKey, []store.ZSetEntry{
+		{
+			Member: member,
+			Score:  float64(mortonCode),
+		},
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return (&resp.Integer{
+		Value: memberAdded,
+	}).Marshal(), nil
+}
+
+func (s *Server) HandleGeoPos(req Request, c *Client) ([]byte, error) {
+	//GEOPOS missing_key London Munich
+	// The response is a RESP array that contains as many elements as the number of locations requested
+	// For each location requested:
+	// If the location exists:
+	// The corresponding element is a RESP array with two elements (i.e. longitude and latitude)
+	// Both elements are "0" (or any other valid floating point number), encoded as a RESP bulk string
+	// If the location doesn't exist:
+	// The corresponding element is a null array (*-1\r\n)
+
+	key := req.Arguments[0]
+	places := make([]string, len(req.Arguments)-1)
+	copy(places, req.Arguments[1:])
+	arr := resp.Array{}
+	entry, ok := s.Store.Get(key)
+	if !ok {
+		for i := range places {
+			_ = i
+			arr.Value = append(arr.Value, string((&resp.NullArray{}).Marshal()))
+		}
+		return arr.Marshal(), nil
+	}
+	if entry.Type != store.EntryTypeSortedSet {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageWrongType,
+		}
+	}
+
+	zSet, ok := entry.Value.(store.ZSet)
+	if !ok {
+		return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
+	}
+	for _, place := range places {
+		score, ok := zSet.HashMap[place]
+		if !ok {
+			arr.Value = append(arr.Value, string((&resp.NullArray{}).Marshal()))
+			continue
+		}
+		corrdinate := decode(uint64(score))
+		valueArr := resp.Array{}
+		valueArr.Value = append(valueArr.Value, string((&resp.BulkString{
+			Value: strconv.FormatFloat(corrdinate.Longitude, 'f', -1, 64),
+		}).Marshal()))
+		valueArr.Value = append(valueArr.Value, string((&resp.BulkString{
+			Value: strconv.FormatFloat(corrdinate.Latitude, 'f', -1, 64),
+		}).Marshal()))
+		arr.Value = append(arr.Value, string(valueArr.Marshal()))
+	}
+	return arr.Marshal(), nil
+}
+
+func (s *Server) HandleGeoDist(req Request, c *Client) ([]byte, error) {
+	//distance = 2*radius *asin()* sqrt(haversion(delta latitude) *cos(p1 latitude)*cos(p2 latitude)*haversin(delta longitude))
+	//GEODIST places Munich Paris
+	key := req.Arguments[0]
+	p1 := req.Arguments[1]
+	p2 := req.Arguments[2]
+	//check if key exist if not return invalid
+	//if not return nil nulk string
+	entry, ok := s.Store.Get(key)
+	if !ok {
+		return (&resp.NullBulkString{}).Marshal(), nil
+	}
+	if entry.Type != store.EntryTypeSortedSet {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageWrongType,
+		}
+	}
+	//if yes then check type if not sorted set return error
+	zset, ok := entry.Value.(store.ZSet)
+	if !ok {
+		return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
+	}
+	score1, ok := zset.HashMap[p1]
+	if !ok {
+		return (&resp.NullBulkString{}).Marshal(), nil
+	}
+	score2, ok := zset.HashMap[p2]
+	if !ok {
+		return (&resp.NullBulkString{}).Marshal(), nil
+	}
+	//get both the member from the sorted set
+	//if one of them do not exit than return the nil bulk string
+	//then convert both to cordinates send the to distance function and return distance
+	p1Cordinates := decode(uint64(score1))
+	p2Cordinates := decode(uint64(score2))
+	distance := GetDistance(p1Cordinates, p2Cordinates)
+	return (&resp.BulkString{
+		Value: strconv.FormatFloat(distance, 'f', -1, 64),
+	}).Marshal(), nil
+
+}
+func GetSearchRangeInMeter(searchRange float64, unit string) float64 {
+	switch unit {
+	case SearchUnitMeter:
+		{
+			return searchRange
+		}
+	case SearchUnitKiloMeter:
+		{
+			return searchRange * 1000
+		}
+	case SearchUnitMile:
+		{
+			return searchRange * 1609.344
+		}
+	case SearchUnitFeet:
+		{
+			return searchRange * 0.3048
+		}
+	default:
+		{
+			return searchRange
+		}
+	}
+}
+func (s *Server) HandleGeoSearch(req Request, c *Client) ([]byte, error) {
+	//GEOSEARCH places FROMLONLAT 2 48 BYRADIUS 100 m
+	key := req.Arguments[0]
+	sourceType := strings.ToLower(req.Arguments[1])
+	longitude, err := strconv.ParseFloat(req.Arguments[2], 64)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageNotFloat,
+		}
+	}
+	latitude, err := strconv.ParseFloat(req.Arguments[3], 64)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageNotFloat,
+		}
+	}
+	searchType := strings.ToLower(req.Arguments[4])
+	searchRange, err := strconv.ParseFloat(req.Arguments[5], 64)
+	if err != nil {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: resp.ErrorMessageNotInteger,
+		}
+	}
+	searchRangeUnit := strings.ToLower(req.Arguments[6])
+	if sourceType != SourceTypeFromLonLat {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: "we only support fromlonlat sourceType iin search queries",
+		}
+	}
+
+	if searchType != SearchTypeByRadius {
+		return nil, &resp.SimpleError{
+			Type:    resp.ERR,
+			Message: "we only support byradius search type in search queries",
+		}
+	}
+
+	searchRange = GetSearchRangeInMeter(searchRange, searchRangeUnit)
+	//places FROMLONLAT 2 48 BYRADIUS 100 m
+	entry, ok := s.Store.Get(key)
+	if !ok {
+		return (&resp.Array{}).Marshal(), nil
+	}
+	if entry.Type != store.EntryTypeSortedSet {
+		return nil, &resp.SimpleError{
+			Type:    resp.WRONGTYPE,
+			Message: resp.ErrorMessageWrongType,
+		}
+	}
+	zset, ok := entry.Value.(store.ZSet)
+	if !ok {
+		return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
+	}
+
+	membersWithinRadius := make([]string, 0)
+	for member, score := range zset.HashMap {
+		cordinates := decode(uint64(score))
+
+		distance := GetDistance(cordinates, Coordinates{
+			Latitude:  latitude,
+			Longitude: longitude,
+		})
+		if distance <= searchRange {
+			membersWithinRadius = append(membersWithinRadius, member)
+		}
+	}
+	arr := resp.Array{}
+	for _, member := range membersWithinRadius {
+		arr.Value = append(arr.Value, string((&resp.BulkString{
+			Value: member,
+		}).Marshal()))
+	}
+	return arr.Marshal(), nil
 }
 
 func (s *Server) HandleZAdd(req Request, c *Client) ([]byte, error) {
-	//validate the parameters
-	//check even arguments are passed
+	// validate the parameters
+	// check even arguments are passed
 	// ZADD racer_scores 8.0 "Sam"
 	setKey := req.Arguments[0]
 	req.Arguments = req.Arguments[1:]
@@ -77,64 +346,26 @@ func (s *Server) HandleZAdd(req Request, c *Client) ([]byte, error) {
 			Message: string(resp.ErrWrongArgCount(req.Command)),
 		}
 	}
-	list := make([]ZSetEntry, 0)
+	list := make([]store.ZSetEntry, 0)
 	for i := 0; i < len(req.Arguments); i += 2 {
-		score, err := strconv.ParseFloat(req.Arguments[i], 32)
+		score, err := strconv.ParseFloat(req.Arguments[i], 64)
 		if err != nil {
 			return nil, &resp.SimpleError{
 				Type:    resp.ERR,
 				Message: resp.ErrorMessageNotFloat,
 			}
 		}
-		list = append(list, ZSetEntry{
+		list = append(list, store.ZSetEntry{
 			Member: req.Arguments[i+1],
-			Score:  float32(score),
+			Score:  score,
 		})
 	}
 
-	var membersAdded int64
-	_, err := s.Store.Update(setKey, func(e *store.Entry) (*store.Entry, error) {
-		if e == nil {
-			zset := store.ZSet{
-				HashMap:   make(map[string]float32),
-				ZSkipList: store.NewSkipList(),
-			}
-			for _, pair := range list {
-				zset.HashMap[pair.Member] = pair.Score
-				zset.ZSkipList.Insert(pair.Member, pair.Score)
-			}
-			membersAdded = int64(len(list))
-			return &store.Entry{
-				Type:  store.EntryTypeSortedSet,
-				Value: zset,
-			}, nil
-		}
-
-		if e.Type != store.EntryTypeSortedSet {
-			return nil, &resp.SimpleError{
-				Type:    resp.ERR,
-				Message: resp.ErrorMessageWrongType,
-			}
-		}
-		zset, ok := e.Value.(store.ZSet)
-		if !ok {
-			return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
-		}
-		for _, pair := range list {
-			oldScore, exists := zset.HashMap[pair.Member]
-			if exists {
-				zset.ZSkipList.Delete(pair.Member, oldScore)
-			} else {
-				membersAdded++
-			}
-			zset.ZSkipList.Insert(pair.Member, pair.Score)
-			zset.HashMap[pair.Member] = pair.Score
-		}
-		return e, nil
-	})
+	membersAdded, err := s.Store.ZAdd(setKey, list)
 	if err != nil {
 		return nil, err
 	}
+
 	return (&resp.Integer{
 		Value: membersAdded,
 	}).Marshal(), nil
@@ -209,7 +440,7 @@ func (s *Server) HandleZRange(req Request, c *Client) ([]byte, error) {
 	len := len(zset.HashMap)
 	startIdx = normalizeIndex(startIdx, len)
 	endIdx = normalizeIndex(endIdx, len)
-	if startIdx >= endIdx {
+	if startIdx > endIdx {
 		return arr.Marshal(), nil
 	}
 
@@ -287,7 +518,7 @@ func (s *Server) HandleZScore(req Request, c *Client) ([]byte, error) {
 	}
 
 	return (&resp.BulkString{
-		Value: strconv.FormatFloat(float64(score), 'f', -1, 32),
+		Value: strconv.FormatFloat(score, 'f', -1, 64),
 	}).Marshal(), nil
 }
 

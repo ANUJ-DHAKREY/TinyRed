@@ -14,7 +14,7 @@ type skipListLevel struct {
 
 type SkipListNode struct {
 	Member string
-	Score  float32
+	Score  float64
 	Level  []skipListLevel
 }
 
@@ -37,14 +37,14 @@ func randomLevel() int {
 	return level
 }
 
-func less(score1 float32, member1 string, score2 float32, member2 string) bool {
+func less(score1 float64, member1 string, score2 float64, member2 string) bool {
 	if score1 != score2 {
 		return score1 < score2
 	}
 	return member1 < member2
 }
 
-func (s *SkipList) Insert(member string, score float32) *SkipListNode {
+func (s *SkipList) Insert(member string, score float64) *SkipListNode {
 	update := make([]*SkipListNode, skipListMaxLevel)
 	rank := make([]int64, skipListMaxLevel)
 
@@ -86,7 +86,7 @@ func (s *SkipList) Insert(member string, score float32) *SkipListNode {
 	return node
 }
 
-func (s *SkipList) Delete(member string, score float32) bool {
+func (s *SkipList) Delete(member string, score float64) bool {
 	update := make([]*SkipListNode, skipListMaxLevel)
 	current := s.Head
 
@@ -115,7 +115,7 @@ func (s *SkipList) Delete(member string, score float32) bool {
 	return true
 }
 
-func (s *SkipList) GetRank(member string, score float32) int64 {
+func (s *SkipList) GetRank(member string, score float64) int64 {
 	var rank int64
 	current := s.Head
 	for i := skipListMaxLevel - 1; i >= 0; i-- {
