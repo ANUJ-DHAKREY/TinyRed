@@ -8,6 +8,7 @@ dump.rdb
 dump.hcd
 appendonlydir/
 test_result.txt
+test_result
 
 # Docs (kept locally, not version controlled)
 *.md
