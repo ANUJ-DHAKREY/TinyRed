@@ -2,14 +2,18 @@ package server
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +57,15 @@ const (
 	ClientModeSubscribed  string = "subscribe"
 )
 
+const (
+	NodeRoleMaster  string = "master"
+	NodeRoleReplica string = "replica"
+)
+
+const (
+	ReSyncTypeFull string = "FULLRESYNC"
+)
+
 var TransactionalCommands map[string]bool = map[string]bool{
 	MULTI:   true,
 	DISCARD: true,
@@ -64,6 +77,8 @@ type Request struct {
 	Command   string
 	Arguments []string
 }
+
+type Response = resp.Value
 
 type Config struct {
 	Port             int    `config:"port"`
@@ -77,6 +92,7 @@ type Config struct {
 	Appenddirname    string `config:"appenddirname"`
 	Appendfilename   string `config:"appendfilename"`
 	Appendfsync      string `config:"appendfsync"`
+	Replicaof        string `config:"-"`
 }
 
 type Client struct {
@@ -89,7 +105,30 @@ type Client struct {
 	DirtyCompareAndSet bool
 	SubscribedChannels map[string]bool
 }
+
+type MasterConfig struct {
+	Host string
+	Port uint16
+	Conn net.Conn
+}
+
+type ReplicaConfig struct {
+	ReplicaId     string
+	Conn          net.Conn
+	ReplicaOffSet int64
+}
+
+type NodeConfig struct {
+	Role              string
+	Master            MasterConfig
+	replicaNodes      []ReplicaConfig
+	ReplicationId     string
+	ReplicationOffset int64
+	ReplicaReady      bool
+}
+
 type Server struct {
+	NodeConfig          *NodeConfig
 	Logger              *slog.Logger
 	Config              *Config
 	Store               *store.Store
@@ -102,6 +141,240 @@ type Server struct {
 	SubscribersMetaData map[string][]int64
 }
 
+func newReplicationID() string {
+	buf := make([]byte, 20)
+	rand.Read(buf)
+	return hex.EncodeToString(buf)
+}
+
+func (s *Server) StartMaster() error {
+	if s.Config.Dir != "" && s.Config.Dbfilename != "" {
+		filePath := filepath.Join(s.Config.Dir, s.Config.Dbfilename)
+
+		err := s.RDB.Load(filePath, s.Store)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if s.Config.Appendonly == TypeAppendOnlyYes {
+		aofMgr, err := aof.New(aof.Config{
+			Dir:            s.Config.Dir,
+			Appenddirname:  s.Config.Appenddirname,
+			Appendfilename: s.Config.Appendfilename,
+			Appendfsync:    s.Config.Appendfsync,
+		})
+		if err != nil {
+			return err
+		}
+		s.AOF = aofMgr
+
+		err = s.AOF.Load(func(args []string) error {
+			req := Request{
+				Command:   strings.ToLower(args[0]),
+				Arguments: args[1:],
+			}
+			client := Client{
+				ClientType:         TypeClientInternal,
+				Id:                 getNewClientId(),
+				Mode:               ClientModeNormal,
+				Conn:               &net.TCPConn{},
+				CommandQueue:       make([]Request, 0),
+				WatchedKeys:        make(map[string]bool, 0),
+				SubscribedChannels: make(map[string]bool, 0),
+			}
+			_, err := s.Execute(req, &client)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	s.NodeConfig.ReplicationId = newReplicationID()
+	s.NodeConfig.ReplicationOffset = 0
+	return nil
+}
+
+func (s *Server) ReplicaHandShake() (net.Conn, *bufio.Reader, error) {
+	//connect to master on tcp connection
+	//write the commands to server and wait for responses
+	//if succesfull add conn object to master conf
+	//and return from this
+	address := net.JoinHostPort(s.NodeConfig.Master.Host, strconv.Itoa(int(s.NodeConfig.Master.Port)))
+
+	conn, err := net.DialTimeout("tcp", address, time.Duration(s.Config.Timeout)*time.Second)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.NodeConfig.Master.Conn = conn
+	reader := bufio.NewReader(conn)
+	//send ping
+	_, err = conn.Write([]byte(resp.StaticRequestPing))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	value, err := resp.ReadResponse(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pong, ok := value.(*resp.SimpleString)
+	if !ok || pong.Value != "PONG" {
+		return nil, nil, fmt.Errorf("expected PONG response, got %T", value)
+	}
+	//send repl conf
+	port := strconv.Itoa(s.Config.Port)
+	_, err = conn.Write([]byte(fmt.Sprintf(resp.StaticRequestReplConfPort, len(port), port)))
+	if err != nil {
+		return nil, nil, err
+	}
+	value, err = resp.ReadResponse(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	OKReply, ok := value.(*resp.SimpleString)
+	if !ok || !strings.EqualFold(OKReply.Value, "OK") {
+		return nil, nil, fmt.Errorf("expected OK response, got %T", value)
+	}
+
+	//send repl conf
+	_, err = conn.Write([]byte(resp.StaticRequestReplConfCapa))
+	if err != nil {
+		return nil, nil, err
+	}
+	value, err = resp.ReadResponse(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	OKReply, ok = value.(*resp.SimpleString)
+	if !ok || !strings.EqualFold(OKReply.Value, "OK") {
+		return nil, nil, fmt.Errorf("expected OK response, got %T", value)
+	}
+
+	//send psync2
+	_, err = conn.Write([]byte(resp.StaticRequestPsync2))
+	if err != nil {
+		return nil, nil, err
+	}
+	value, err = resp.ReadResponse(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ReSyncResp, ok := value.(*resp.SimpleString)
+	if !ok {
+		return nil, nil, fmt.Errorf("expected a simple string response, got %T", value)
+	}
+	fields := strings.Fields(ReSyncResp.Value)
+	if len(fields) != 3 {
+		return nil, nil, fmt.Errorf("invalid psync2 response")
+	}
+	if fields[0] != ReSyncTypeFull || fields[1] == "" || fields[2] == "" {
+		return nil, nil, fmt.Errorf("invalid resync response")
+	}
+
+	return conn, reader, nil
+}
+func (s *Server) StartReplica() error {
+	conn, reader, err := s.ReplicaHandShake()
+	if err != nil {
+		return err
+	}
+	//$<length_of_file>\r\n<binary_contents_of_file>
+	data, err := resp.ReadHeader(reader)
+	if err != nil {
+		return err
+	}
+	symbol := data[0]
+	if symbol != resp.TypeSymbols[resp.TypeBulkString] {
+		return fmt.Errorf("invalid RDB data recieved")
+	}
+	size := data[1 : len(data)-2]
+	rdbFileSize, err := strconv.Atoi(string(size))
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, rdbFileSize)
+	_, err = io.ReadFull(reader, buf)
+	if err != nil {
+		return err
+	}
+	s.ExecutionMutex.Lock()
+	s.NodeConfig.ReplicaReady = true
+	s.ExecutionMutex.Unlock()
+	return s.processMasterCommands(conn, reader)
+}
+
+func (s *Server) processMasterCommands(conn net.Conn, reader *bufio.Reader) error {
+	client := &Client{
+		ClientType:         TypeClientInternal,
+		Id:                 getNewClientId(),
+		Mode:               ClientModeNormal,
+		Conn:               conn,
+		CommandQueue:       make([]Request, 0),
+		WatchedKeys:        make(map[string]bool),
+		SubscribedChannels: make(map[string]bool),
+	}
+
+	for {
+		req, err := s.ParseRequest(reader)
+		if err != nil {
+			return err
+		}
+		requestOffset := int64(len(getRequestinResp(req)))
+
+		if req.Command == REPLCONF && len(req.Arguments) == 2 &&
+			strings.EqualFold(req.Arguments[0], "GETACK") {
+			ack := getRequestinResp(Request{
+				Command:   REPLCONF,
+				Arguments: []string{"ACK", strconv.FormatInt(s.NodeConfig.ReplicationOffset, 10)},
+			})
+			if _, err := conn.Write(ack); err != nil {
+				return err
+			}
+			s.NodeConfig.ReplicationOffset += requestOffset
+			continue
+		}
+
+		if _, err := s.Execute(req, client); err != nil {
+			return err
+		}
+		s.NodeConfig.ReplicationOffset += requestOffset
+	}
+}
+func IsValidMasterConf(endpoint string) bool {
+	endpoint = strings.TrimSpace(endpoint)
+	conf := strings.Fields(endpoint)
+	if len(conf) != 2 {
+		return false
+	}
+	host := conf[0]
+	portStr := conf[1]
+	if host == "" {
+		return false
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return false
+	}
+
+	if port < 1 || port > 65535 {
+		return false
+	}
+
+	target := net.JoinHostPort(host, portStr)
+
+	conn, err := net.DialTimeout("tcp", target, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
 func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb.RDBProcessor) (*Server, error) {
 	s := &Server{
 		Config:              config,
@@ -112,6 +385,31 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		ExecutionMutex:      sync.RWMutex{},
 		WatcherClients:      map[string][]int64{},
 		SubscribersMetaData: map[string][]int64{},
+		NodeConfig: &NodeConfig{
+			Role:         NodeRoleMaster,
+			replicaNodes: make([]ReplicaConfig, 0),
+			Master:       MasterConfig{},
+			ReplicaReady: true,
+		},
+	}
+
+	replicaOf := config.Replicaof
+	if replicaOf != "" {
+		fields := strings.Fields(replicaOf)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid master configuration")
+		}
+		s.NodeConfig.Master.Host = fields[0]
+		port, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid master port")
+		}
+		s.NodeConfig.Master.Port = uint16(port)
+		s.NodeConfig.Role = NodeRoleReplica
+		s.NodeConfig.ReplicaReady = false
 	}
 
 	s.CommandHandlers = map[string]CommandEntry{
@@ -145,49 +443,31 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		GEOPOS:      {Handler: s.HandleGeoPos, MinArgs: 2, MaxArgs: -1, IsWrite: false},
 		GEODIST:     {Handler: s.HandleGeoDist, MinArgs: 3, MaxArgs: 3, IsWrite: false},
 		GEOSEARCH:   {Handler: s.HandleGeoSearch, MinArgs: 7, MaxArgs: 7, IsWrite: false},
+		INFO:        {Handler: s.HandleInfo, MinArgs: 0, MaxArgs: -1, IsWrite: false},
+		REPLCONF:    {Handler: s.HandleReplConf, MinArgs: 2, MaxArgs: 2, IsWrite: false},
+		PSYNC:       {Handler: s.HandlePSync, MinArgs: 2, MaxArgs: 2, IsWrite: false},
+		WAIT:        {Handler: s.HandleWait, MinArgs: 2, MaxArgs: 2, IsWrite: false},
 	}
 
-	if config.Dir != "" && config.Dbfilename != "" {
-		filePath := filepath.Join(config.Dir, config.Dbfilename)
-
-		err := s.RDB.Load(filePath, s.Store)
-
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if config.Appendonly == TypeAppendOnlyYes {
-		aofMgr, err := aof.New(aof.Config{
-			Dir:            config.Dir,
-			Appenddirname:  config.Appenddirname,
-			Appendfilename: config.Appendfilename,
-			Appendfsync:    config.Appendfsync,
-		})
-		if err != nil {
-			return nil, err
-		}
-		s.AOF = aofMgr
-
-		err = s.AOF.Load(func(args []string) error {
-			req := Request{
-				Command:   strings.ToLower(args[0]),
-				Arguments: args[1:],
+	switch s.NodeConfig.Role {
+	case NodeRoleMaster:
+		{
+			err := s.StartMaster()
+			if err != nil {
+				return nil, err
 			}
-			client := Client{
-				ClientType:         TypeClientInternal,
-				Id:                 getNewClientId(),
-				Mode:               ClientModeNormal,
-				Conn:               &net.TCPConn{},
-				CommandQueue:       make([]Request, 0),
-				WatchedKeys:        make(map[string]bool, 0),
-				SubscribedChannels: make(map[string]bool, 0),
-			}
-			_, err := s.Execute(req, &client)
-			return err
-		})
-		if err != nil {
-			return nil, err
+		}
+	case NodeRoleReplica:
+		{
+			go func() {
+				if err := s.StartReplica(); err != nil {
+					s.Logger.Error("replica handshake failed", "error", err)
+				}
+			}()
+		}
+	default:
+		{
+			return nil, fmt.Errorf("Invalid value provided for replicaof flag")
 		}
 	}
 
@@ -206,6 +486,16 @@ func (s *Server) Execute(req Request, c *Client) ([]byte, error) {
 		return nil, &resp.SimpleError{
 			Type:    resp.ERR,
 			Message: fmt.Sprintf("wrong number of arguments for '%s' command", req.Command),
+		}
+	}
+	if s.NodeConfig.Role == NodeRoleReplica && !s.NodeConfig.ReplicaReady {
+		switch req.Command {
+		case INFO, CONFIG, ECHO, PING:
+		default:
+			return nil, &resp.SimpleError{
+				Type:    resp.ERR,
+				Message: "LOADING Replica is loading the dataset in memory",
+			}
 		}
 	}
 
@@ -287,9 +577,10 @@ func (s *Server) Serve(listener net.Listener) error {
 
 func GetDefaultConfig() (*Config, error) {
 	config := &Config{
+
 		Port:             6379,
 		Bind:             "127.0.0.1",
-		Timeout:          60,
+		Timeout:          5,
 		KeepAlive:        true,
 		KeepAliveTimeout: 300,
 		Dir:              "",
@@ -322,7 +613,7 @@ func GetConfig(dConfig *Config) *Config {
 	flag.StringVar(&dConfig.Appenddirname, "appenddirname", dConfig.Appenddirname, "The subdirectory under dir where AOF and manifest files are stored")
 	flag.StringVar(&dConfig.Appendfilename, "appendfilename", dConfig.Appendfilename, "The name of the append-only file that records write operations")
 	flag.StringVar(&dConfig.Appendfsync, "appendfsync", dConfig.Appendfsync, "How often buffered writes are flushed to the AOF file on disk")
-
+	flag.StringVar(&dConfig.Replicaof, "replicaof", dConfig.Replicaof, "Decides the role of master in redis cluster(master/replica)")
 	flag.Parse()
 
 	return dConfig
@@ -342,6 +633,16 @@ func (e *ProtocolError) Unwrap() error {
 
 func protocolError(err error) error {
 	return &ProtocolError{Err: err}
+}
+
+func (s *Server) ParseResponse(reader *bufio.Reader) (Response, error) {
+	chars, err := reader.Peek(1)
+	if err != nil {
+
+	}
+	_ = chars
+
+	return Response{}, nil
 }
 
 func (s *Server) ParseRequest(reader *bufio.Reader) (Request, error) {
@@ -422,6 +723,29 @@ func (s *Server) UnwatchAll(c *Client) {
 func (s *Server) ResetTransactionState(c *Client) {
 	s.UnwatchAll(c)
 	c.ResetTransactionState()
+}
+
+func newReplicaId() string {
+	buf := make([]byte, 10)
+	rand.Read(buf)
+	return hex.EncodeToString(buf)
+}
+func (s *Server) AddReplica(c *Client) {
+	s.NodeConfig.replicaNodes = append(s.NodeConfig.replicaNodes, ReplicaConfig{
+		ReplicaId:     newReplicaId(),
+		ReplicaOffSet: 0,
+		Conn:          c.Conn,
+	})
+}
+
+func getRequestinResp(req Request) []byte {
+	args := append([]string{strings.ToUpper(req.Command)}, req.Arguments...)
+	arr := resp.Array{}
+	for _, arg := range args {
+		bs := resp.BulkString{Value: arg}
+		arr.Value = append(arr.Value, string(bs.Marshal()))
+	}
+	return arr.Marshal()
 }
 func (s *Server) HandleConnection(c *Client) {
 	reader := bufio.NewReader(c.Conn)
@@ -514,9 +838,19 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 			}
 
-			if s.Config.Appendonly == TypeAppendOnlyYes {
-				err := s.AOF.Append(AOFData)
-				_ = err
+			cmdEntry, ok := s.CommandHandlers[req.Command]
+			if ok && cmdEntry.IsWrite {
+				if s.Config.Appendonly == TypeAppendOnlyYes {
+					err := s.AOF.Append(AOFData)
+					_ = err
+				}
+
+				requestInResp := getRequestinResp(req)
+				for _, replica := range s.NodeConfig.replicaNodes {
+					_, err := replica.Conn.Write(requestInResp)
+					_ = err
+					//ignoring error for now
+				}
 			}
 
 			//handle AOF error
@@ -551,19 +885,51 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 			}
 		}
-
-		cmdEntry, ok := s.CommandHandlers[req.Command]
-		if s.Config.Appendonly == TypeAppendOnlyYes && ok && cmdEntry.IsWrite {
-			err := s.AOF.AppendCmd(strings.ToUpper(req.Command), req.Arguments)
-			// for now ignore the error handle AOF write failures in future
-			_ = err
-		}
 		s.ExecutionMutex.RUnlock()
+		cmdEntry, ok := s.CommandHandlers[req.Command]
+		if ok && cmdEntry.IsWrite {
+			if s.Config.Appendonly == TypeAppendOnlyYes {
+				err := s.AOF.AppendCmd(strings.ToUpper(req.Command), req.Arguments)
+				// for now ignore the error handle AOF write failures in future
+				_ = err
+			}
+
+			requestInResp := getRequestinResp(req)
+			for _, replica := range s.NodeConfig.replicaNodes {
+				_, err := replica.Conn.Write(requestInResp)
+				_ = err
+				//ignoring error for now
+			}
+		}
+
+		if req.Command == PSYNC {
+			s.AddReplica(c)
+			c.Conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
+			_, err = c.Conn.Write(data)
+
+			//err := s.RDB.Load(filepath.Join(s.Config.Dir, s.Config.Dbfilename), s.Store)
+			//for now we are ignoring rdn falure error and sendinf a
+			// static empty rdb file content in response
+			buf := []byte("$0\r\n")
+			_, err = c.Conn.Write(buf)
+			if err != nil {
+				s.DeleteReplica(c)
+			}
+			continue
+		}
 		c.Conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
 		_, err = c.Conn.Write(data)
 		if err != nil {
 			s.Logger.Error("error writing response", "err", err.Error())
 			break
+		}
+	}
+}
+
+func (s *Server) DeleteReplica(c *Client) {
+	for idx, replica := range s.NodeConfig.replicaNodes {
+		if replica.Conn == c.Conn {
+			s.NodeConfig.replicaNodes = slices.Delete(s.NodeConfig.replicaNodes, idx, idx+1)
 		}
 	}
 }

@@ -46,6 +46,10 @@ const (
 	GEOPOS       string = "geopos"
 	GEODIST      string = "geodist"
 	GEOSEARCH    string = "geosearch"
+	INFO         string = "info"
+	REPLCONF     string = "replconf"
+	PSYNC        string = "psync"
+	WAIT         string = "wait"
 )
 
 var SubcribedModeCommands = map[string]bool{
@@ -255,6 +259,51 @@ func GetSearchRangeInMeter(searchRange float64, unit string) float64 {
 		}
 	}
 }
+
+func (s *Server) HandlePSync(req Request, c *Client) ([]byte, error) {
+	//+FULLRESYNC <REPL_ID> 0\r\n
+	ss := resp.SimpleString{
+		Value: "FULLRESYNC ",
+	}
+	ss.Value += s.NodeConfig.ReplicationId + " "
+	ss.Value += strconv.Itoa(int(s.NodeConfig.ReplicationOffset))
+	return ss.Marshal(), nil
+}
+
+func (s *Server) HandleReplConf(req Request, c *Client) ([]byte, error) {
+	return (&resp.SimpleString{
+		Value: "OK",
+	}).Marshal(), nil
+}
+
+func (s *Server) HandleWait(req Request, c *Client) ([]byte, error) {
+	replicas, err := strconv.Atoi(req.Arguments[0])
+	if err != nil || replicas < 0 {
+		return nil, &resp.SimpleError{Type: resp.ERR, Message: resp.ErrorMessageNotInteger}
+	}
+	if len(s.NodeConfig.replicaNodes) == 0 {
+		return (&resp.Integer{Value: 0}).Marshal(), nil
+	}
+	if replicas > len(s.NodeConfig.replicaNodes) {
+		replicas = len(s.NodeConfig.replicaNodes)
+	}
+	return (&resp.Integer{Value: int64(replicas)}).Marshal(), nil
+}
+
+func (s *Server) HandleInfo(req Request, c *Client) ([]byte, error) {
+	//return role of the node
+	role := s.NodeConfig.Role
+	if role == NodeRoleReplica {
+		role = "slave"
+	}
+	bs := resp.BulkString{
+		Value: "role:" + role + "\n",
+	}
+	bs.Value += "master_replid:" + s.NodeConfig.ReplicationId + "\n"
+	bs.Value += "master_repl_offset:" + strconv.Itoa(int(s.NodeConfig.ReplicationOffset)) + "\n"
+	return bs.Marshal(), nil
+}
+
 func (s *Server) HandleGeoSearch(req Request, c *Client) ([]byte, error) {
 	//GEOSEARCH places FROMLONLAT 2 48 BYRADIUS 100 m
 	key := req.Arguments[0]

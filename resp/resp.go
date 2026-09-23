@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -47,9 +48,28 @@ const (
 	ErrorMessageNotFloat   string = "value is not float or out of range"
 )
 
+// Pre-marshaled RESP arrays for the replica handshake, ready to write
+// straight to the master connection.
+//
+// StaticRequestReplConfPort still needs the replica's listening port
+// filled in (RESP bulk strings are length-prefixed, so the port's
+// length/value can't be baked in at compile time). Build it with:
+//
+//	port := strconv.Itoa(myPort)
+//	req := fmt.Sprintf(resp.StaticRequestReplConfPort, len(port), port)
+const (
+	StaticRequestPing         string = "*1\r\n$4\r\nPING\r\n"
+	StaticRequestPsync2       string = "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
+	StaticRequestReplConfPort string = "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n"
+	StaticRequestReplConfCapa string = "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"
+)
+
+type Value struct {
+	Type string
+	Val  RespType
+}
+
 type RespType interface {
-	//will need to check the return type of this
-	//cause we need to handle diffrent return types for this
 	Unmarshal(reader *bufio.Reader) error
 	Marshal() []byte
 }
@@ -84,7 +104,31 @@ type BulkError struct {
 	Value string
 }
 
-func readHeader(reader *bufio.Reader) ([]byte, error) {
+func ReadResponse(reader *bufio.Reader) (any, error) {
+	prefix, err := reader.Peek(1)
+	if err != nil {
+		return nil, err
+	}
+
+	switch prefix[0] {
+	case TypeSymbols[TypeSimpleString]:
+		value := &SimpleString{}
+		return value, value.Unmarshal(reader)
+	case TypeSymbols[TypeSimpleError]:
+		value := &SimpleError{}
+		return value, value.Unmarshal(reader)
+	case TypeSymbols[TypeInteger]:
+		value := &Integer{}
+		return value, value.Unmarshal(reader)
+	case TypeSymbols[TypeBulkString]:
+		value := &BulkString{}
+		return value, value.Unmarshal(reader)
+	default:
+		return nil, fmt.Errorf("unsupported RESP response type %q", prefix[0])
+	}
+}
+
+func ReadHeader(reader *bufio.Reader) ([]byte, error) {
 	data, err := reader.ReadBytes('\n')
 	if err != nil {
 		if err == io.EOF && len(data) > 0 {
@@ -119,7 +163,7 @@ func (a *Array) Unmarshal(reader *bufio.Reader) error {
 	//store result in a result array with any format
 	//and then return it
 
-	data, err := readHeader(reader)
+	data, err := ReadHeader(reader)
 	if err != nil {
 		return err
 	}
@@ -214,7 +258,7 @@ func (a *SimpleString) Marshal() []byte {
 
 func (ss *BulkString) Unmarshal(reader *bufio.Reader) error {
 
-	data, err := readHeader(reader)
+	data, err := ReadHeader(reader)
 	if err != nil {
 		return err
 	}
@@ -257,7 +301,24 @@ func (a *BulkString) Marshal() []byte {
 }
 
 func (a *SimpleError) Unmarshal(reader *bufio.Reader) error {
+	data, err := ReadHeader(reader)
+	if err != nil {
+		return err
+	}
+	if data[0] != TypeSymbols[TypeSimpleError] {
+		return fmt.Errorf("RESP simple error: expected %q, got %q", TypeSymbols[TypeSimpleError], data[0])
+	}
 
+	parts := string(data[1 : len(data)-2])
+	if parts == "" {
+		return fmt.Errorf("RESP simple error: empty error")
+	}
+
+	fields := strings.SplitN(parts, " ", 2)
+	a.Type = ErrorType(fields[0])
+	if len(fields) == 2 {
+		a.Message = fields[1]
+	}
 	return nil
 }
 
@@ -360,7 +421,19 @@ func (a *NullBulkString) Marshal() []byte {
 }
 
 func (a *Integer) Unmarshal(reader *bufio.Reader) error {
+	data, err := ReadHeader(reader)
+	if err != nil {
+		return err
+	}
+	if data[0] != TypeSymbols[TypeInteger] {
+		return fmt.Errorf("RESP integer: expected %q, got %q", TypeSymbols[TypeInteger], data[0])
+	}
 
+	value, err := strconv.ParseInt(string(data[1:len(data)-2]), 10, 64)
+	if err != nil {
+		return fmt.Errorf("RESP integer: %w", err)
+	}
+	a.Value = value
 	return nil
 }
 

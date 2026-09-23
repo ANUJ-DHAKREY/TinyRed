@@ -44,7 +44,7 @@ var enabledPhases = map[string]bool{
 	phaseOptimisticLocking:      true,
 	phasePubSub:                 true,
 	phaseRDB:                    true,
-	phaseReplication:            false,
+	phaseReplication:            true,
 	phaseSortedSets:             true,
 	phaseStreams:                false,
 	phaseTransactions:           true,
