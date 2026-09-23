@@ -281,11 +281,14 @@ func (s *Server) HandleWait(req Request, c *Client) ([]byte, error) {
 	if err != nil || replicas < 0 {
 		return nil, &resp.SimpleError{Type: resp.ERR, Message: resp.ErrorMessageNotInteger}
 	}
-	if len(s.NodeConfig.replicaNodes) == 0 {
+	s.sessionMu.RLock()
+	replicaCount := len(s.NodeConfig.replicaNodes)
+	s.sessionMu.RUnlock()
+	if replicaCount == 0 {
 		return (&resp.Integer{Value: 0}).Marshal(), nil
 	}
-	if replicas > len(s.NodeConfig.replicaNodes) {
-		replicas = len(s.NodeConfig.replicaNodes)
+	if replicas > replicaCount {
+		replicas = replicaCount
 	}
 	return (&resp.Integer{Value: int64(replicas)}).Marshal(), nil
 }
@@ -613,22 +616,22 @@ func (s *Server) HandleUnsubscribe(req Request, c *Client) ([]byte, error) {
 		return response.Marshal(), nil
 	}
 	delete(c.SubscribedChannels, channel)
-	subscribers, ok := s.SubscribersMetaData[channel]
-	if !ok {
-		response.Value = append(response.Value, string((&resp.Integer{Value: int64(len(c.SubscribedChannels))}).Marshal()))
-		return response.Marshal(), nil
+
+	s.sessionMu.Lock()
+	subscribers, ok := s.subscribersMetaData[channel]
+	if ok {
+		idx := slices.Index(subscribers, c.Id)
+		if idx != -1 {
+			subscribers = slices.Delete(subscribers, idx, idx+1)
+			if len(subscribers) == 0 {
+				delete(s.subscribersMetaData, channel)
+			} else {
+				s.subscribersMetaData[channel] = subscribers
+			}
+		}
 	}
-	idx := slices.Index(subscribers, c.Id)
-	if idx == -1 {
-		response.Value = append(response.Value, string((&resp.Integer{Value: int64(len(c.SubscribedChannels))}).Marshal()))
-		return response.Marshal(), nil
-	}
-	subscribers = slices.Delete(subscribers, idx, idx+1)
-	if len(subscribers) == 0 {
-		delete(s.SubscribersMetaData, channel)
-	} else {
-		s.SubscribersMetaData[channel] = subscribers
-	}
+	s.sessionMu.Unlock()
+
 	response.Value = append(response.Value, string((&resp.Integer{Value: int64(len(c.SubscribedChannels))}).Marshal()))
 	return response.Marshal(), nil
 }
@@ -637,28 +640,33 @@ func (s *Server) HandlePublish(req Request, c *Client) ([]byte, error) {
 	//get the message and the channel
 	channel := req.Arguments[0]
 	message := req.Arguments[1]
-	subscribers, ok := s.SubscribersMetaData[channel]
-	if !ok || len(subscribers) == 0 {
+
+	s.sessionMu.RLock()
+	recipients := make([]*Client, 0, len(s.subscribersMetaData[channel]))
+	for _, subId := range s.subscribersMetaData[channel] {
+		if subscriber, ok := s.clients[subId]; ok {
+			recipients = append(recipients, subscriber)
+		}
+	}
+	s.sessionMu.RUnlock()
+
+	if len(recipients) == 0 {
 		return (&resp.Integer{Value: 0}).Marshal(), nil
 	}
-	for _, subId := range subscribers {
+	for _, subscriber := range recipients {
 		//check how many subcribers exist for that key
 		//for each subcribers spwan a go routine for now just write in a for loop
 		//and write response to the subcriber
-		subscriber, ok := s.Clients[subId]
-		if !ok {
-			return nil, fmt.Errorf("some internal error occured client/subscriber npt found")
-		}
 		messageName := (&resp.BulkString{Value: "message"}).Marshal()
-		channel := (&resp.BulkString{Value: channel}).Marshal()
+		channelBulk := (&resp.BulkString{Value: channel}).Marshal()
 		messageContent := (&resp.BulkString{Value: string(message)}).Marshal()
-		data := (&resp.Array{Value: []string{string(messageName), string(channel), string(messageContent)}}).Marshal()
+		data := (&resp.Array{Value: []string{string(messageName), string(channelBulk), string(messageContent)}}).Marshal()
 		_, err := subscriber.Conn.Write(data)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return (&resp.Integer{Value: int64(len(subscribers))}).Marshal(), nil
+	return (&resp.Integer{Value: int64(len(recipients))}).Marshal(), nil
 	//return the count of subcribers in the result
 
 }
@@ -671,12 +679,11 @@ func (s *Server) HandleSubscribe(req Request, c *Client) ([]byte, error) {
 	if !ok || !exist {
 		c.SubscribedChannels[channel] = true
 	}
-	subscribers, ok := s.SubscribersMetaData[channel]
-	if !ok {
-		s.SubscribersMetaData[channel] = []int64{c.Id}
-	}
-	subscribers = append(subscribers, c.Id)
-	s.SubscribersMetaData[channel] = subscribers
+
+	s.sessionMu.Lock()
+	s.subscribersMetaData[channel] = append(s.subscribersMetaData[channel], c.Id)
+	s.sessionMu.Unlock()
+
 	c.Mode = ClientModeSubscribed
 	// "subscribe" (as a RESP bulk string)
 	// The channel name (as a RESP bulk string)
@@ -717,20 +724,19 @@ func (s *Server) HandleWatch(req Request, c *Client) ([]byte, error) {
 	copy(keys, req.Arguments)
 	//if not register the keys to client watcher and
 	// add client to global key watcher list
+	s.sessionMu.Lock()
 	for _, key := range keys {
 		exist, ok := c.WatchedKeys[key]
 		if !ok || !exist {
 			c.WatchedKeys[key] = true
 		}
-		watcherList, ok := s.WatcherClients[key]
-		if !ok {
-			s.WatcherClients[key] = []int64{c.Id}
-		}
-
+		watcherList := s.watcherClients[key]
 		if !slices.Contains(watcherList, c.Id) {
 			watcherList = append(watcherList, c.Id)
 		}
+		s.watcherClients[key] = watcherList
 	}
+	s.sessionMu.Unlock()
 	//responde back with ok
 	return (&resp.SimpleString{
 		Value: "OK",

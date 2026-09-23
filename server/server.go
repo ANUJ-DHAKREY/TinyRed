@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"tinyred/aof"
 	"tinyred/rdb"
@@ -102,7 +103,7 @@ type Client struct {
 	Conn               net.Conn
 	CommandQueue       []Request
 	WatchedKeys        map[string]bool
-	DirtyCompareAndSet bool
+	DirtyCompareAndSet atomic.Bool
 	SubscribedChannels map[string]bool
 }
 
@@ -128,17 +129,22 @@ type NodeConfig struct {
 }
 
 type Server struct {
-	NodeConfig          *NodeConfig
-	Logger              *slog.Logger
-	Config              *Config
-	Store               *store.Store
-	CommandHandlers     map[string]CommandEntry
-	RDB                 rdb.RDBProcessor
-	AOF                 aof.AOF
-	Clients             map[int64]*Client
-	ExecutionMutex      sync.RWMutex
-	WatcherClients      map[string][]int64
-	SubscribersMetaData map[string][]int64
+	NodeConfig      *NodeConfig
+	Logger          *slog.Logger
+	Config          *Config
+	Store           *store.Store
+	CommandHandlers map[string]CommandEntry
+	RDB             rdb.RDBProcessor
+	AOF             aof.AOF
+
+	executionMutex sync.RWMutex
+
+	sessionMu           sync.RWMutex
+	clients             map[int64]*Client
+	watcherClients      map[string][]int64
+	subscribersMetaData map[string][]int64
+
+	clientIDCounter atomic.Int64
 }
 
 func newReplicationID() string {
@@ -177,7 +183,7 @@ func (s *Server) StartMaster() error {
 			}
 			client := Client{
 				ClientType:         TypeClientInternal,
-				Id:                 getNewClientId(),
+				Id:                 s.nextClientID(),
 				Mode:               ClientModeNormal,
 				Conn:               &net.TCPConn{},
 				CommandQueue:       make([]Request, 0),
@@ -302,16 +308,16 @@ func (s *Server) StartReplica() error {
 	if err != nil {
 		return err
 	}
-	s.ExecutionMutex.Lock()
+	s.executionMutex.Lock()
 	s.NodeConfig.ReplicaReady = true
-	s.ExecutionMutex.Unlock()
+	s.executionMutex.Unlock()
 	return s.processMasterCommands(conn, reader)
 }
 
 func (s *Server) processMasterCommands(conn net.Conn, reader *bufio.Reader) error {
 	client := &Client{
 		ClientType:         TypeClientInternal,
-		Id:                 getNewClientId(),
+		Id:                 s.nextClientID(),
 		Mode:               ClientModeNormal,
 		Conn:               conn,
 		CommandQueue:       make([]Request, 0),
@@ -381,10 +387,9 @@ func NewServer(config *Config, logger *slog.Logger, st *store.Store, rdbProc rdb
 		Logger:              logger,
 		Store:               st,
 		RDB:                 rdbProc,
-		Clients:             make(map[int64]*Client),
-		ExecutionMutex:      sync.RWMutex{},
-		WatcherClients:      map[string][]int64{},
-		SubscribersMetaData: map[string][]int64{},
+		clients:             make(map[int64]*Client),
+		watcherClients:      map[string][]int64{},
+		subscribersMetaData: map[string][]int64{},
 		NodeConfig: &NodeConfig{
 			Role:         NodeRoleMaster,
 			replicaNodes: make([]ReplicaConfig, 0),
@@ -512,16 +517,18 @@ func (s *Server) Execute(req Request, c *Client) ([]byte, error) {
 	if err != nil {
 		return data, err
 	}
-	//this is not thread safe, will make this thread safe when we restructure the codebase
 	if cmd.IsWrite {
 		key := req.Arguments[0]
-		watcherList, ok := s.WatcherClients[key]
-		if !ok {
-			return data, nil
+		s.sessionMu.RLock()
+		watchers := make([]*Client, 0, len(s.watcherClients[key]))
+		for _, watcherId := range s.watcherClients[key] {
+			if watcher, ok := s.clients[watcherId]; ok {
+				watchers = append(watchers, watcher)
+			}
 		}
-		for _, watcherId := range watcherList {
-			watcher := s.Clients[watcherId]
-			watcher.DirtyCompareAndSet = true
+		s.sessionMu.RUnlock()
+		for _, watcher := range watchers {
+			watcher.DirtyCompareAndSet.Store(true)
 		}
 	}
 	return data, err
@@ -537,18 +544,12 @@ func (s *Server) ListenAndServe() error {
 	return s.Serve(listner)
 }
 
-var ClientOffset int64
-var ClientIDMutex sync.Mutex
-
-func getNewClientId() int64 {
-	ClientIDMutex.Lock()
-	defer ClientIDMutex.Unlock()
-	ClientOffset += 1
-	return ClientOffset
+func (s *Server) nextClientID() int64 {
+	return s.clientIDCounter.Add(1)
 }
 
 func (s *Server) AddClient(conn net.Conn) *Client {
-	clientId := getNewClientId()
+	clientId := s.nextClientID()
 	client := &Client{
 		Id:                 clientId,
 		ClientType:         TypeClientExternal,
@@ -559,7 +560,9 @@ func (s *Server) AddClient(conn net.Conn) *Client {
 		SubscribedChannels: make(map[string]bool, 0),
 	}
 
-	s.Clients[clientId] = client
+	s.sessionMu.Lock()
+	s.clients[clientId] = client
+	s.sessionMu.Unlock()
 	return client
 }
 func (s *Server) Serve(listener net.Listener) error {
@@ -677,7 +680,9 @@ func (s *Server) CloseConnection(c *Client) {
 	if err != nil {
 		s.Logger.Error("error closing Connection", "err", err)
 	}
-	delete(s.Clients, c.Id)
+	s.sessionMu.Lock()
+	delete(s.clients, c.Id)
+	s.sessionMu.Unlock()
 }
 
 func (s *Server) ExecuteInTransaction(req Request, c *Client) []byte {
@@ -701,10 +706,11 @@ func (c *Client) ResetTransactionState() {
 func (s *Server) UnwatchAll(c *Client) {
 	// Remove c from each key's global watcher list.
 	keys := c.WatchedKeys
+	s.sessionMu.Lock()
 	for key := range keys {
-		watchers, ok := s.WatcherClients[key]
+		watchers, ok := s.watcherClients[key]
 		if !ok {
-			break
+			continue
 		}
 		i := slices.Index(watchers, c.Id)
 		if i == -1 {
@@ -712,12 +718,14 @@ func (s *Server) UnwatchAll(c *Client) {
 		}
 		watchers = slices.Delete(watchers, i, i+1)
 		if len(watchers) == 0 {
-			delete(s.WatcherClients, key)
+			delete(s.watcherClients, key)
+		} else {
+			s.watcherClients[key] = watchers
 		}
-		s.WatcherClients[key] = watchers
 	}
+	s.sessionMu.Unlock()
 	c.WatchedKeys = map[string]bool{}
-	c.DirtyCompareAndSet = false
+	c.DirtyCompareAndSet.Store(false)
 }
 
 func (s *Server) ResetTransactionState(c *Client) {
@@ -731,11 +739,13 @@ func newReplicaId() string {
 	return hex.EncodeToString(buf)
 }
 func (s *Server) AddReplica(c *Client) {
+	s.sessionMu.Lock()
 	s.NodeConfig.replicaNodes = append(s.NodeConfig.replicaNodes, ReplicaConfig{
 		ReplicaId:     newReplicaId(),
 		ReplicaOffSet: 0,
 		Conn:          c.Conn,
 	})
+	s.sessionMu.Unlock()
 }
 
 func getRequestinResp(req Request) []byte {
@@ -810,7 +820,7 @@ func (s *Server) HandleConnection(c *Client) {
 				continue
 			}
 
-			if c.DirtyCompareAndSet {
+			if c.DirtyCompareAndSet.Load() {
 				s.ResetTransactionState(c)
 				data := (&resp.NullArray{}).Marshal()
 				_, err = c.Conn.Write(data)
@@ -820,10 +830,10 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 				continue
 			}
-			s.ExecutionMutex.Lock()
+			s.executionMutex.Lock()
 			AOFData := make([]byte, 0)
 			response := resp.Array{}
-			queue := s.Clients[c.Id].CommandQueue
+			queue := c.CommandQueue
 			s.ResetTransactionState(c)
 			for _, req := range queue {
 				data := s.ExecuteInTransaction(req, c)
@@ -846,7 +856,10 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 
 				requestInResp := getRequestinResp(req)
-				for _, replica := range s.NodeConfig.replicaNodes {
+				s.sessionMu.RLock()
+				replicas := append([]ReplicaConfig(nil), s.NodeConfig.replicaNodes...)
+				s.sessionMu.RUnlock()
+				for _, replica := range replicas {
 					_, err := replica.Conn.Write(requestInResp)
 					_ = err
 					//ignoring error for now
@@ -856,7 +869,7 @@ func (s *Server) HandleConnection(c *Client) {
 			//handle AOF error
 			//for now ignore the error in future we need to
 			//stop servng write commands in case of error while writing
-			s.ExecutionMutex.Unlock()
+			s.executionMutex.Unlock()
 			c.Conn.SetWriteDeadline(time.Now().Add(120 * time.Second))
 			_, err := c.Conn.Write(response.Marshal())
 			if err != nil {
@@ -866,7 +879,7 @@ func (s *Server) HandleConnection(c *Client) {
 			continue
 		}
 
-		s.ExecutionMutex.RLock()
+		s.executionMutex.RLock()
 		data, err := s.Execute(req, c)
 		if err != nil {
 			var clientErr *resp.SimpleError
@@ -885,7 +898,7 @@ func (s *Server) HandleConnection(c *Client) {
 				}
 			}
 		}
-		s.ExecutionMutex.RUnlock()
+		s.executionMutex.RUnlock()
 		cmdEntry, ok := s.CommandHandlers[req.Command]
 		if ok && cmdEntry.IsWrite {
 			if s.Config.Appendonly == TypeAppendOnlyYes {
@@ -895,7 +908,10 @@ func (s *Server) HandleConnection(c *Client) {
 			}
 
 			requestInResp := getRequestinResp(req)
-			for _, replica := range s.NodeConfig.replicaNodes {
+			s.sessionMu.RLock()
+			replicas := append([]ReplicaConfig(nil), s.NodeConfig.replicaNodes...)
+			s.sessionMu.RUnlock()
+			for _, replica := range replicas {
 				_, err := replica.Conn.Write(requestInResp)
 				_ = err
 				//ignoring error for now
@@ -927,9 +943,12 @@ func (s *Server) HandleConnection(c *Client) {
 }
 
 func (s *Server) DeleteReplica(c *Client) {
+	s.sessionMu.Lock()
 	for idx, replica := range s.NodeConfig.replicaNodes {
 		if replica.Conn == c.Conn {
 			s.NodeConfig.replicaNodes = slices.Delete(s.NodeConfig.replicaNodes, idx, idx+1)
+			break
 		}
 	}
+	s.sessionMu.Unlock()
 }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -71,17 +72,11 @@ func New() *Store {
 }
 
 func (s *Store) addWaiter(key string) *BLPopWaiter {
-	waiter := BLPopWaiter{}
-	waiter.channel = make(chan BLPopdata, 1)
-	waiter.key = key
-	waiters, ok := s.waiterStore[key]
-	if !ok {
-		s.waiterStore[key] = []BLPopWaiter{
-			waiter,
-		}
+	waiter := BLPopWaiter{
+		channel: make(chan BLPopdata, 1),
+		key:     key,
 	}
-	waiters = append(waiters, waiter)
-	s.waiterStore[key] = waiters
+	s.waiterStore[key] = append(s.waiterStore[key], waiter)
 	return &waiter
 }
 
@@ -91,9 +86,20 @@ func (s *Store) LPopList(key string) {
 
 func (s *Store) removeWaiter(waiter *BLPopWaiter) {
 	waiters := s.waiterStore[waiter.key]
-	remainingWaiters := waiters[1:]
+	idx := -1
+	for i := range waiters {
+		if waiters[i].channel == waiter.channel {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return
+	}
+	remainingWaiters := slices.Delete(waiters, idx, idx+1)
 	if len(remainingWaiters) == 0 {
 		delete(s.waiterStore, waiter.key)
+		return
 	}
 	s.waiterStore[waiter.key] = remainingWaiters
 }
@@ -226,7 +232,7 @@ func (s *Store) ListPush(key string, values []string, direction bool) (*Entry, e
 
 	existing, ok := list.Value.([]string)
 	if !ok {
-		return nil, fmt.Errorf(ErrorMessageStringTypeCaste)
+		return nil, errors.New(ErrorMessageStringTypeCaste)
 	}
 	if direction == Right {
 		values = append(existing, values...)
@@ -280,7 +286,7 @@ func (s *Store) ZAdd(key string, entries []ZSetEntry) (int64, error) {
 		}
 		zset, ok := e.Value.(ZSet)
 		if !ok {
-			return nil, fmt.Errorf(ErrorMessageZsetTypeCaste)
+			return nil, errors.New(ErrorMessageZsetTypeCaste)
 		}
 		for _, pair := range entries {
 			oldScore, exists := zset.HashMap[pair.Member]
